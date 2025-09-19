@@ -123,6 +123,29 @@ conda activate comp5339
 # 用户名: postgres, 密码: postgre, 端口: 5432
 ```
 
+### 使用 pip 安装依赖（可选方案）
+
+如果不使用 conda，也可以使用内置 `venv` 和 `pip`：
+
+```bash
+# 1) 创建并激活虚拟环境（macOS/Linux）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 2) 升级 pip 并安装依赖
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# 3) 运行程序
+python src/data_acquisition_processor.py
+```
+
+开发环境要求与说明：
+- Python 3.11+（建议）
+- 已安装 Google Chrome。Selenium 4.20+ 默认使用 Selenium Manager 自动下载驱动，无需手动配置 chromedriver。
+- PostgreSQL 本地可用，且账户配置与 `src/database_config.py` 中的 `DB_CONFIG` 一致。
+- 如果网络环境受限，地理编码（Nominatim）可能失败或变慢；可多次重试或离线运行仅数据库流程。
+
 ### 运行数据获取
 
 ```bash
