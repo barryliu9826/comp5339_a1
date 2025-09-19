@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+"""数据获取和处理工具"""
+
+from pathlib import Path
+import requests
+import pandas as pd
+import openpyxl
+import time
+import re
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import queue
+
+from database_config import get_db_connection, save_nger_data, save_cer_data, create_abs_table, insert_abs_data
+from geocoding import add_geocoding_to_cer_data, save_global_cache
+
+# 配置
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+DATA_DIR.mkdir(exist_ok=True)
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "COMP5339-Assignment1/1.0"})
+
+# ============================================================================
+# 数据获取
+# ============================================================================
+
+def download_nger_year(year_data, results_queue):
+    """下载NGER数据"""
+    thread_id = threading.get_ident()
+    year_label, url = year_data
+    try:
+        print(f"[线程{thread_id}] 下载NGER数据: {year_label}...")
+        resp = requests.get(url, timeout=120, headers={"User-Agent": "COMP5339-Assignment1/1.0"})
+        resp.raise_for_status()
+        
+        if "json" in resp.headers.get("Content-Type", "") or resp.text.strip().startswith("["):
+            data = resp.json()
+            df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
+            results_queue.put((year_label, df, None))
+            print(f"✓[线程{thread_id}] NGER数据下载完成: {year_label}")
+        else:
+            results_queue.put((year_label, None, "格式错误"))
+    except Exception as e:
+        results_queue.put((year_label, None, str(e)))
+        print(f"✗[线程{thread_id}] NGER数据下载失败: {year_label}: {e}")
+
+def fetch_nger_data(conn=None, max_workers=4):
+    """多线程获取NGER数据"""
+    table = pd.read_csv(DATA_DIR / "nger_data_api_links.csv")
+    year_col = next((c for c in ["year_label", "year"] if c in table.columns), None)
+    url_col = next((c for c in ["url", "api_url", "link"] if c in table.columns), None)
+    
+    if not year_col or not url_col:
+        return False
+    
+    should_close = conn is None
+    if conn is None:
+        conn = get_db_connection()
+        if not conn:
+            return False
+    
+    tasks = [(str(row[year_col]).strip(), str(row[url_col]).strip()) 
+             for _, row in table.iterrows() 
+             if str(row[url_col]).lower() != "nan"]
+    
+    print(f"开始多线程下载NGER数据 ({max_workers}线程): {len(tasks)}个年份文件")
+    
+    results_queue, success_count = queue.Queue(), 0
+    
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(download_nger_year, task, results_queue) for task in tasks]
+            [f.result() for f in as_completed(futures)]
+        
+        while not results_queue.empty():
+            year_label, df, error = results_queue.get()
+            if error: 
+                print(f"✗{year_label}: {error}")
+                continue
+            if df is not None and not df.empty and save_nger_data(conn, year_label, df):
+                success_count += 1
+        
+        if should_close: conn.close()
+        print(f"✓NGER数据处理完成: {success_count}/{len(tasks)} 个年份成功入库")
+        return success_count > 0
+        
+    except Exception as e:
+        print(f"✗NGER数据处理失败: {e}")
+        if should_close and conn: conn.close()
+        return False
+
+def fetch_abs_data():
+    """下载ABS数据"""
+    url = "https://www.abs.gov.au/methodologies/data-region-methodology/2011-24/14100DO0003_2011-24.xlsx"
+    filepath = DATA_DIR / "14100DO0003_2011-24.xlsx"
+    
+    try:
+        response = SESSION.get(url, stream=True, headers={'User-Agent': 'Mozilla/5.0'})
+        response.raise_for_status()
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(8192):
+                if chunk: f.write(chunk)
+        print("✓ABS数据下载完成")
+        return filepath
+    except Exception as e:
+        print(f"✗ABS数据下载失败: {e}")
+        return None
+
+# ============================================================================
+# CER爬取
+# ============================================================================
+
+def setup_driver():
+    """设置WebDriver"""
+    options = Options()
+    for arg in ["--headless", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]:
+        options.add_argument(arg)
+    options.add_argument("--window-size=1920,1080")
+    
+    try:
+        return webdriver.Chrome(options=options)
+    except Exception as e:
+        print(f"✗WebDriver: {e}")
+        return None
+
+def identify_table(df):
+    """识别表类型"""
+    cols = ' '.join(df.columns).lower()
+    if 'accreditation code' in cols and 'power station name' in cols:
+        return "approved_power_stations"
+    elif 'project name' in cols and 'committed date' in cols:
+        return "committed_power_stations"
+    elif 'project name' in cols and 'mw capacity' in cols:
+        return "probable_power_stations"
+    return None
+
+def parse_table(table_element):
+    """解析表格"""
+    try:
+        rows = []
+        table_rows = table_element.find_elements(By.TAG_NAME, "tr")
+        if not table_rows:
+            return pd.DataFrame()
+        
+        headers = [th.text.strip() for th in table_rows[0].find_elements(By.TAG_NAME, "th")]
+        if not headers:
+            return pd.DataFrame()
+        
+        for row in table_rows[1:]:
+            cells = row.find_elements(By.TAG_NAME, "td")
+            if cells:
+                row_data = [cell.text.strip() for cell in cells]
+                if len(row_data) == len(headers):
+                    rows.append(row_data)
+        
+        if not rows:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(rows, columns=headers)
+        
+        # 过滤空列
+        keep_cols = []
+        for i, col in enumerate(df.columns):
+            col_name = str(col).strip()
+            if col_name and col_name.lower() not in ['', 'nan', 'none']:
+                col_data = df.iloc[:, i].astype(str).str.strip()
+                if not col_data.isin(['', 'nan', 'None']).all():
+                    keep_cols.append(col)
+        
+        return df[keep_cols] if keep_cols else pd.DataFrame()
+    except Exception as e:
+        print(f"✗解析: {e}")
+        return pd.DataFrame()
+
+def get_max_pages(table_element):
+    """获取最大页数"""
+    try:
+        container = table_element.find_element(By.XPATH, "ancestor::*[.//table][1]")
+        elements = container.find_elements(By.XPATH, ".//*[contains(text(), 'Showing') and contains(text(), 'of')]")
+        if elements:
+            match = re.search(r'showing\s*(\d+)\s*to\s*(\d+)\s*of\s*(\d+)', elements[0].text, re.IGNORECASE)
+            if match:
+                start, end, total = map(int, match.groups())
+                return (total + (end - start)) // (end - start + 1)
+        return 10
+    except:
+        return 10
+
+def scrape_paginated_table(driver, table_element, table_type):
+    """爬取分页表"""
+    max_pages, frames, page = get_max_pages(table_element), [], 1
+    print(f"{table_type}(最大{max_pages}页)")
+    
+    while page <= max_pages:
+        try:
+            df = parse_table(table_element)
+            if not df.empty: 
+                frames.append(df)
+                print(f"  第{page}页: {len(df)}行")
+            
+            if page < max_pages:
+                try:
+                    container = table_element.find_element(By.XPATH, "ancestor::*[.//table][1]")
+                    next_btn = container.find_element(By.XPATH, ".//button[contains(text(), '›') or contains(text(), 'Next')]")
+                    if next_btn.is_displayed() and next_btn.is_enabled():
+                        driver.execute_script("arguments[0].click();", next_btn)
+                        time.sleep(3)
+                        page += 1
+                    else: break
+                except: break
+            else: break
+                
+        except StaleElementReferenceException:
+            time.sleep(2)
+            try:
+                tables = driver.find_elements(By.TAG_NAME, "table")
+                table_element = tables[0]
+            except:
+                break
+        except Exception as e:
+            print(f"  页{page}错误: {e}")
+            break
+    
+    if frames:
+        result = pd.concat(frames, ignore_index=True).drop_duplicates()
+        print(f"  ✓{len(result)}行")
+        return result
+    return pd.DataFrame()
+
+def fetch_cer_data(conn=None):
+    """爬取CER数据"""
+    driver = setup_driver()
+    if not driver:
+        return False
+    
+    should_close = conn is None
+    if conn is None:
+        conn = get_db_connection()
+        if not conn:
+            driver.quit()
+            return False
+    
+    try:
+        driver.get("https://cer.gov.au/markets/reports-and-data/large-scale-renewable-energy-data")
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        time.sleep(5)
+        
+        tables = driver.find_elements(By.TAG_NAME, "table")
+        targets = ["approved_power_stations", "committed_power_stations", "probable_power_stations"]
+        success_count = 0
+        
+        print(f"发现CER网页表格: {len(tables)}个")
+        
+        for i, table in enumerate(tables):
+            try:
+                df_temp = parse_table(table)
+                if df_temp.empty: continue
+                
+                table_type = identify_table(df_temp)
+                if table_type not in targets: continue
+                
+                print(f"\n开始处理CER表格: {table_type}...")
+                df_result = scrape_paginated_table(driver, table, table_type)
+                if df_result.empty: continue
+                
+                print(f"  对CER数据进行多线程地理编码...")
+                df_geocoded = add_geocoding_to_cer_data(df_result, table_type, max_workers=10)
+                
+                if save_cer_data(conn, table_type, df_geocoded):
+                    success_count += 1
+                    print(f"  ✓CER表格处理完成: {table_type}")
+                    
+            except Exception as e:
+                print(f"  ✗CER表格{i+1}处理失败: {e}")
+        
+        if should_close: conn.close()
+        print(f"✓CER数据处理完成: {success_count}个表格成功入库")
+        return success_count > 0
+        
+    except Exception as e:
+        print(f"✗CER数据处理失败: {e}")
+        if should_close and conn: conn.close()
+        return False
+    finally:
+        driver.quit()
+
+# ============================================================================
+# Excel处理
+# ============================================================================
+
+def read_merged_headers(file_path: str, sheet_name: str) -> pd.DataFrame:
+    """读取合并表头"""
+    wb = openpyxl.load_workbook(file_path, data_only=True)
+    ws = wb[sheet_name]
+    merged_ranges = list(ws.merged_cells.ranges)
+    
+    column_names = []
+    for col in range(1, ws.max_column + 1):
+        parts = []
+        for row in [6, 7]:
+            merged_cell = next((r for r in merged_ranges 
+                              if r.min_row <= row <= r.max_row and r.min_col <= col <= r.max_col), None)
+            
+            if merged_cell:
+                cell_value = ws.cell(merged_cell.min_row, merged_cell.min_col).value
+            else:
+                cell_value = ws.cell(row, col).value
+            
+            if cell_value and str(cell_value).strip():
+                part = str(cell_value).strip()
+                if part not in parts:
+                    parts.append(part)
+        
+        column_names.append(" - ".join(parts) if parts else f"Column_{col}")
+    
+    df = pd.read_excel(file_path, sheet_name=sheet_name, header=None, skiprows=7)
+    df.columns = column_names[:len(df.columns)]
+    return df
+
+def get_merged_cells(file_path: str, sheet_name: str):
+    """获取合并单元格"""
+    wb = openpyxl.load_workbook(file_path, data_only=True)
+    ws = wb[sheet_name]
+    
+    cells = []
+    for merged_range in ws.merged_cells.ranges:
+        if merged_range.min_row == 6:
+            cell_value = ws.cell(merged_range.min_row, merged_range.min_col).value
+            if cell_value and str(cell_value).strip():
+                cells.append({
+                    'value': str(cell_value).strip(),
+                    'start_col': merged_range.min_col,
+                    'end_col': merged_range.max_col
+                })
+    return cells
+
+def process_abs_merged_cell_with_db(args):
+    """处理ABS单元格并入库"""
+    thread_id = threading.get_ident()
+    cell, df, level_info, db_config = args
+    
+    try:
+        print(f"[线程{thread_id}] 处理ABS合并单元格: {cell['value']}")
+        import psycopg2
+        thread_conn = psycopg2.connect(**db_config)
+        
+        try:
+            start_col, end_col = cell['start_col'] - 1, cell['end_col']
+            selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col:end_col])
+            subset_df = df[selected_cols].copy()
+            
+            table_name = create_abs_table(thread_conn, cell['value'], selected_cols)
+            if table_name and insert_abs_data(thread_conn, table_name, subset_df, level_info['level']):
+                print(f"✓[线程{thread_id}] ABS数据入库成功: {cell['value']}")
+                return {'success': True, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': None}
+            else:
+                print(f"✗[线程{thread_id}] ABS数据入库失败: {cell['value']}")
+                return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': '入库失败'}
+        finally:
+            thread_conn.close()
+        
+    except Exception as e:
+        print(f"✗[线程{thread_id}] ABS单元格处理失败: {cell['value']}: {e}")
+        return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': str(e)}
+
+def process_abs_data(file_path: str, conn=None, max_workers=4):
+    """多线程处理ABS数据"""
+    should_close = conn is None
+    if conn is None:
+        conn = get_db_connection()
+        if not conn:
+            return False
+    
+    try:
+        # 地理级别定义
+        levels = {
+            "Table 1": {"desc": "州级", "level": 0},
+            "Table 2": {"desc": "地方政府级", "level": 1}
+        }
+        
+        for sheet_name in ["Table 1", "Table 2"]:
+            level_info = levels[sheet_name]
+            print(f"\n开始处理ABS表格: {sheet_name}({level_info['desc']})...")
+            
+            merged_cells = get_merged_cells(file_path, sheet_name)
+            df = read_merged_headers(file_path, sheet_name)
+            print(f"发现{len(merged_cells)}个合并单元格, 数据{df.shape[0]}行")
+            
+            from database_config import DB_CONFIG
+            tasks = [(cell, df, level_info, DB_CONFIG) for cell in merged_cells]
+            
+            print(f"使用{max_workers}个线程并行处理ABS数据...")
+            
+            results = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(process_abs_merged_cell_with_db, task): task[0]['value'] for task in tasks}
+                for future in as_completed(futures):
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        cell_name = futures[future]
+                        print(f"✗线程异常{cell_name}: {e}")
+                        results.append({'success': False, 'cell_name': cell_name, 'error': str(e)})
+            
+            success_count = sum(1 for r in results if r['success'])
+            print(f"✓ABS表格处理完成: {sheet_name} - {success_count}/{len(merged_cells)} 个单元格成功")
+            
+            # 线程统计
+            thread_stats = {}
+            for r in results:
+                tid = r.get('thread_id', 'Unknown')
+                if tid not in thread_stats:
+                    thread_stats[tid] = {'success': 0, 'failed': 0}
+                if r['success']:
+                    thread_stats[tid]['success'] += 1
+                else:
+                    thread_stats[tid]['failed'] += 1
+            
+            print("ABS数据处理线程执行统计:")
+            for tid, stats in thread_stats.items():
+                print(f"  线程{tid}: {stats['success']}/{stats['success']+stats['failed']}")
+        
+        if should_close: conn.close()
+        print("✓ABS数据处理全部完成")
+        return True
+        
+    except Exception as e:
+        print(f"✗ABS数据处理失败: {e}")
+        if should_close and conn: conn.close()
+        return False
+
+# ============================================================================
+# 主函数
+# ============================================================================
+
+def main():
+    """主函数"""
+    print("=" * 50)
+    print("数据获取和处理系统")
+    print("NGER数据 + ABS经济数据 + CER电站数据")
+    print("=" * 50)
+    
+    conn = get_db_connection()
+    if not conn:
+        print("✗数据库连接失败")
+        return
+    
+    try:
+        print("\n=== 1. NGER数据获取和处理 ===")
+        nger_ok = fetch_nger_data(conn, max_workers=10)
+        
+        print("\n=== 2. ABS经济数据获取和处理 ===")
+        abs_file = fetch_abs_data()
+        abs_ok = process_abs_data(str(abs_file), conn, max_workers=10) if abs_file else False
+        
+        print("\n=== 3. CER电站数据获取和处理 ===")
+        cer_ok = fetch_cer_data(conn)
+        
+        results = [nger_ok, abs_ok, cer_ok]
+        success = sum(results)
+        print(f"\n{'='*50}")
+        print(f"✓数据处理系统执行完成: {success}/3 个模块成功")
+        nger_symbol = '✓' if nger_ok else '✗'
+        abs_symbol = '✓' if abs_ok else '✗'
+        cer_symbol = '✓' if cer_ok else '✗'
+        print(f"NGER: {nger_symbol}  |  ABS: {abs_symbol}  |  CER: {cer_symbol}")
+        print(f"{'='*50}")
+        
+        # 保存地理编码缓存
+        print("正在保存地理编码缓存...")
+        try:
+            save_global_cache()
+            print("✓地理编码缓存已保存")
+        except Exception as e:
+            print(f"✗保存地理编码缓存失败: {e}")
+        
+    finally:
+        if conn: conn.close()
+
+if __name__ == "__main__":
+    main()
