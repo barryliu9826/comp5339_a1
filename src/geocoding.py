@@ -63,8 +63,8 @@ class GeocodingCache:
                 return cached_entry.get('result')
             return None
     
-    def set(self, query: str, result: Dict) -> None:
-        """设置缓存结果"""
+    def _set_cache_entry(self, query: str, result: Optional[Dict]) -> None:
+        """设置缓存条目的通用方法"""
         with self.lock:
             cache_key = self._get_cache_key(query)
             self.cache[cache_key] = {
@@ -74,16 +74,13 @@ class GeocodingCache:
                 'cache_key': cache_key
             }
     
+    def set(self, query: str, result: Dict) -> None:
+        """设置缓存结果"""
+        self._set_cache_entry(query, result)
+    
     def set_none(self, query: str) -> None:
         """缓存失败结果（避免重复查询）"""
-        with self.lock:
-            cache_key = self._get_cache_key(query)
-            self.cache[cache_key] = {
-                'query': query,
-                'result': None,
-                'cached_at': time.time(),
-                'cache_key': cache_key
-            }
+        self._set_cache_entry(query, None)
     
     def get_stats(self) -> Dict[str, Any]:
         """获取缓存统计信息"""
@@ -157,6 +154,17 @@ def clear_global_cache():
     if _global_cache:
         _global_cache.clear_cache()
 
+def initialize_geocoding_cache(cache_file: str = None):
+    """初始化地理编码缓存（在程序启动时调用）"""
+    global _global_cache
+    if cache_file is None:
+        cache_file = "data/geocoding_cache.json"
+    
+    print("正在初始化地理编码缓存...")
+    _global_cache = GeocodingCache(cache_file)
+    print(f"✓地理编码缓存初始化完成: {len(_global_cache.cache)} 条记录已加载")
+    return _global_cache
+
 # ============================================================================
 # 地理编码器
 # ============================================================================
@@ -170,12 +178,14 @@ class Geocoder:
         self.base_url = "https://nominatim.openstreetmap.org/search"
         self.cache = {}  # 内存缓存（用于快速访问）
         self.use_persistent_cache = use_persistent_cache
+        # 使用全局缓存（应该在程序启动时通过initialize_geocoding_cache()预加载）
         self.persistent_cache = get_global_cache() if use_persistent_cache else None
         
     def geocode_query(self, query: str) -> Optional[Dict]:
         """执行地理编码查询"""
         # 1. 首先检查内存缓存
         if query in self.cache: 
+            print(f"  [缓存命中-内存] 查询: {query}")
             return self.cache[query]
         
         # 2. 检查持久化缓存
@@ -184,9 +194,11 @@ class Geocoder:
             if cached_result is not None:
                 # 将结果加载到内存缓存
                 self.cache[query] = cached_result
+                print(f"  [缓存命中-持久化] 查询: {query}")
                 return cached_result
         
         try:
+            print(f"  [API调用] 查询: {query}")
             params = {
                 'q': query,
                 'format': 'json',
@@ -225,15 +237,17 @@ class Geocoder:
                 if self.use_persistent_cache and self.persistent_cache:
                     self.persistent_cache.set(query, geocode_result)
                 
+                print(f"  [API成功] 查询: {query} -> {result.get('display_name', 'N/A')}")
                 return geocode_result
             else:
                 # 缓存失败结果
                 self.cache[query] = None
                 if self.use_persistent_cache and self.persistent_cache:
                     self.persistent_cache.set_none(query)
+                print(f"  [API无结果] 查询: {query}")
                 return None
         except Exception as e:
-            print(f"  地理编码API调用失败: {e}")
+            print(f"  [API失败] 查询: {query} -> 错误: {e}")
             # 缓存失败结果
             if self.use_persistent_cache and self.persistent_cache:
                 self.persistent_cache.set_none(query)
@@ -241,82 +255,79 @@ class Geocoder:
         finally:
             time.sleep(1.1)
     
+    def _build_geocode_queries(self, row: pd.Series, table_type: str) -> list:
+        """构建地理编码查询列表"""
+        queries = []
+        
+        if table_type == "approved_power_stations":
+            name = row.get('Power station name', '').strip()
+            state = row.get('State', '').strip()
+            postcode = row.get('Postcode', '').strip()
+            
+            if name and state:
+                if postcode:
+                    queries.extend([
+                        f"{postcode}, {state}, Australia",
+                        f"{name}, {postcode}, {state}, Australia"
+                    ])
+                
+                if ',' in name:
+                    main_name = name.split(',')[0].strip()
+                    queries.append(f"{main_name}, {state}, Australia")
+                
+                queries.extend([
+                    f"{name}, {state}, Australia",
+                    f"{name} power station, {state}, Australia",
+                    f"{state}, Australia"
+                ])
+                
+        elif table_type in ["committed_power_stations", "probable_power_stations"]:
+            name = row.get('Project Name', '').strip()
+            state = row.get('State', '').strip() if 'State' in row.index else ''
+            
+            if name:
+                if ',' in name:
+                    main_name = name.split(',')[0].strip()
+                    if state:
+                        queries.append(f"{main_name}, {state}, Australia")
+                    queries.append(f"{main_name}, Australia")
+                
+                if state:
+                    queries.extend([
+                        f"{name}, {state}, Australia",
+                        f"{state}, Australia"
+                    ])
+                
+                queries.extend([
+                    f"{name} power station, Australia",
+                    f"{name} renewable energy, Australia" if table_type == "committed_power_stations" else f"{name} {row.get('Fuel Source', '').strip()}, {state}, Australia" if table_type == "probable_power_stations" and state and row.get('Fuel Source', '').strip() else None
+                ])
+                
+                # 过滤掉None值
+                queries = [q for q in queries if q is not None]
+        
+        return queries
+    
     def geocode_power_station(self, row: pd.Series, table_type: str) -> Dict:
         """对电站进行地理编码"""
         geocode_result = {'lat': None, 'lon': None, 'formatted_address': None, 'place_id': None, 'osm_type': None, 'osm_id': None,
                          'confidence': None, 'match_type': None, 'locality': None, 'postcode': None, 'state_full': None, 'country': None,
                          'geocode_query': None, 'geocode_provider': None}
         
-        queries = []
-        if table_type == "approved_power_stations":
-            # 正确的列名是 'Power station name' (小写s)
-            name = row.get('Power station name', '').strip()
-            state = row.get('State', '').strip()
-            postcode = row.get('Postcode', '').strip()
-            
-            if name and state:
-                # 尝试多种查询策略
-                if postcode:
-                    queries.append(f"{postcode}, {state}, Australia")  # 先尝试邮编+州
-                    queries.append(f"{name}, {postcode}, {state}, Australia")
-                
-                # 提取主要地名进行查询
-                if ',' in name:
-                    main_name = name.split(',')[0].strip()
-                    queries.append(f"{main_name}, {state}, Australia")
-                
-                queries.append(f"{name}, {state}, Australia")
-                queries.append(f"{name} power station, {state}, Australia")
-                
-                # 最后尝试只查询州
-                queries.append(f"{state}, Australia")
-                
-        elif table_type == "committed_power_stations":
-            name = row.get('Project Name', '').strip()
-            state = row.get('State', '').strip() if 'State' in row.index else ''
-            if name:
-                # 提取主要地名
-                if ',' in name:
-                    main_name = name.split(',')[0].strip()
-                    if state:
-                        queries.append(f"{main_name}, {state}, Australia")
-                    queries.append(f"{main_name}, Australia")
-                
-                if state:
-                    queries.append(f"{name}, {state}, Australia")
-                    queries.append(f"{state}, Australia")  # 最后尝试只查询州
-                queries.append(f"{name} power station, Australia")
-                queries.append(f"{name} renewable energy, Australia")
-                
-        elif table_type == "probable_power_stations":
-            name = row.get('Project Name', '').strip()
-            fuel = row.get('Fuel Source', '').strip() if 'Fuel Source' in row.index else ''
-            state = row.get('State', '').strip() if 'State' in row.index else ''
-            if name:
-                # 提取主要地名
-                if ',' in name:
-                    main_name = name.split(',')[0].strip()
-                    if state:
-                        queries.append(f"{main_name}, {state}, Australia")
-                    queries.append(f"{main_name}, Australia")
-                
-                if state and fuel:
-                    queries.append(f"{name} {fuel}, {state}, Australia")
-                if state:
-                    queries.append(f"{name}, {state}, Australia")
-                    queries.append(f"{state}, Australia")  # 最后尝试只查询州
-                queries.append(f"{name} power station, Australia")
+        queries = self._build_geocode_queries(row, table_type)
+        print(f"  准备尝试 {len(queries)} 个地理编码查询...")
         
-        for query in queries:
+        for i, query in enumerate(queries, 1):
             if query:
-                print(f"  尝试地理编码查询: {query}")
+                print(f"  查询 {i}/{len(queries)}: {query}")
                 result = self.geocode_query(query)
                 if result:
                     geocode_result.update(result)
                     print(f"  ✓地理编码成功: {result.get('formatted_address', 'N/A')}")
                     break
         
-        if not geocode_result['lat']: print(f"  ✗地理编码失败: 无法找到位置")
+        if not geocode_result['lat']: 
+            print(f"  ✗地理编码失败: 尝试了 {len(queries)} 个查询均无结果")
         return geocode_result
 
 def geocode_single_station(args):
@@ -347,17 +358,43 @@ def geocode_single_station(args):
             'error': str(e)
         }
 
+# 地理编码列定义
+GEOCODE_COLUMNS = ['lat', 'lon', 'formatted_address', 'place_id', 'osm_type', 'osm_id',
+                  'confidence', 'match_type', 'locality', 'postcode', 'state_full', 
+                  'country', 'geocode_query', 'geocode_provider']
+
+def _initialize_geocode_columns(df: pd.DataFrame) -> None:
+    """初始化地理编码列"""
+    for col in GEOCODE_COLUMNS:
+        df[col] = None
+
+def _update_dataframe_with_results(df: pd.DataFrame, results: list) -> int:
+    """更新DataFrame with地理编码结果"""
+    success_count = 0
+    for result in results:
+        if result['success'] and result['result']:
+            idx = result['idx']
+            geocode_result = result['result']
+            
+            for col in GEOCODE_COLUMNS:
+                df.at[idx, col] = geocode_result.get(col)
+            
+            success_count += 1
+    return success_count
+
+def _safe_save_cache():
+    """安全保存缓存"""
+    try:
+        save_global_cache()
+    except:
+        pass
+
 def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: int = 3) -> pd.DataFrame:
     """为CER数据添加地理编码（多线程版本）"""
-    print(f"开始对{table_type}进行多线程地理编码处理（{max_workers}个线程）...")
-    
-    geocode_columns = ['lat', 'lon', 'formatted_address', 'place_id', 'osm_type', 'osm_id',
-                      'confidence', 'match_type', 'locality', 'postcode', 'state_full', 
-                      'country', 'geocode_query', 'geocode_provider']
+    print(f"开始对{table_type}进行地理编码处理（{max_workers}个线程）...")
     
     # 初始化地理编码列
-    for col in geocode_columns: 
-        df[col] = None
+    _initialize_geocode_columns(df)
     
     total_rows = len(df)
     print(f"准备处理{total_rows}个电站...")
@@ -370,6 +407,7 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
     success_count = 0
     
     try:
+        # 多线程处理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
             future_to_idx = {
@@ -384,7 +422,6 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
                     results.append(result)
                     
                     if result['success']:
-                        success_count += 1
                         print(f"  ✓[线程{threading.get_ident()}] 第{result['idx']+1}个电站地理编码成功")
                     else:
                         print(f"  ✗[线程{threading.get_ident()}] 第{result['idx']+1}个电站地理编码失败")
@@ -401,58 +438,7 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
         
         # 线程安全地更新DataFrame
         print(f"\\n正在更新DataFrame...")
-        df_lock = threading.Lock()
-        
-        with df_lock:
-            for result in results:
-                if result['success'] and result['result']:
-                    idx = result['idx']
-                    geocode_result = result['result']
-                    
-                    for col in geocode_columns:
-                        df.at[idx, col] = geocode_result.get(col)
-        
-        # 保存持久化缓存
-        print("正在保存地理编码缓存...")
-        save_global_cache()
-        
-        print(f"✓多线程地理编码处理完成: {success_count}/{total_rows} 个电站成功获取位置")
-        return df
-        
-    except Exception as e:
-        print(f"✗多线程地理编码处理失败: {e}")
-        # 即使失败也尝试保存缓存
-        try:
-            save_global_cache()
-        except:
-            pass
-        return df
-
-def add_geocoding_to_cer_data_single(df: pd.DataFrame, table_type: str) -> pd.DataFrame:
-    """为CER数据添加地理编码（单线程版本，保持向后兼容）"""
-    print(f"开始对{table_type}进行地理编码处理...")
-    
-    geocoder = Geocoder()
-    geocode_columns = ['lat', 'lon', 'formatted_address', 'place_id', 'osm_type', 'osm_id',
-                      'confidence', 'match_type', 'locality', 'postcode', 'state_full', 
-                      'country', 'geocode_query', 'geocode_provider']
-    
-    for col in geocode_columns: df[col] = None
-    
-    total_rows, success_count = len(df), 0
-    
-    try:
-        for idx, row in df.iterrows():
-            name = row.get('Power station name', row.get('Project Name', 'Unknown'))
-            print(f"  处理第{idx+1}/{total_rows}个电站: {name}")
-            
-            geocode_result = geocoder.geocode_power_station(row, table_type)
-            
-            # 更新DataFrame
-            for col in geocode_columns:
-                df.at[idx, col] = geocode_result.get(col)
-            
-            if geocode_result['lat']: success_count += 1
+        success_count = _update_dataframe_with_results(df, results)
         
         # 保存持久化缓存
         print("正在保存地理编码缓存...")
@@ -464,9 +450,5 @@ def add_geocoding_to_cer_data_single(df: pd.DataFrame, table_type: str) -> pd.Da
     except Exception as e:
         print(f"✗地理编码处理失败: {e}")
         # 即使失败也尝试保存缓存
-        try:
-            save_global_cache()
-        except:
-            pass
+        _safe_save_cache()
         return df
-

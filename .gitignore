@@ -1,1 +1,15 @@
 .DS_Store
+
+# 排除data目录下的所有文件
+data/
+
+# 排除Python缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# 排除src目录下的__pycache__
+src/__pycache__/

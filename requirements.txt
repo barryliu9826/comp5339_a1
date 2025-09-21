@@ -1,6 +1,14 @@
-requests>=2.31
-pandas>=2.2
-openpyxl>=3.1
-selenium>=4.20
-psycopg2-binary>=2.9
-numpy>=1.26
+# Core dependencies for data processing
+requests>=2.31.0
+pandas>=2.2.0
+openpyxl>=3.1.0
+numpy>=1.26.0
+
+# Web scraping and automation
+selenium>=4.20.0
+
+# Database connectivity
+psycopg2-binary>=2.9.0
+
+# Additional dependencies for geocoding and caching
+# (requests and pandas already included above)

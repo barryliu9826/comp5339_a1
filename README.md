@@ -35,25 +35,26 @@
 
 ```
 src/
-├── data_acquisition_processor.py  # 主处理程序 (513行)
-├── database_config.py            # 数据库配置和操作 (267行)
-└── geocoding.py                  # 地理编码与缓存（已集成）
+├── data_acquisition_processor.py  # 主处理程序 (521行)
+├── database_config.py            # 数据库配置和操作 (644行)
+├── geocoding.py                  # 地理编码与缓存 (454行)
+└── excel_utils.py                # Excel处理工具 (55行)
 
 data/
 ├── nger_data_api_links.csv       # NGER API链接
 ├── 14100DO0003_2011-24.xlsx     # ABS Excel数据
 └── geocoding_cache.json         # 地理编码持久化缓存
-
-backup/                           # 历史版本备份
 ```
 
 ### 技术栈
 
 - **Python 3.11+** (conda环境: comp5339)
-- **数据处理**: pandas, openpyxl, numpy
-- **网络请求**: requests
-- **网页爬虫**: selenium (Chrome WebDriver)
-- **数据库**: PostgreSQL (psycopg2)
+- **数据处理**: pandas>=2.2.0, openpyxl>=3.1.0, numpy>=1.26.0
+- **网络请求**: requests>=2.31.0
+- **网页爬虫**: selenium>=4.20.0 (Chrome WebDriver)
+- **数据库**: PostgreSQL (psycopg2-binary>=2.9.0)
+- **地理编码**: Nominatim API (通过requests)
+- **Excel处理**: openpyxl (合并单元格解析)
 
 ## 数据库设计
 
@@ -123,9 +124,9 @@ conda activate comp5339
 # 用户名: postgres, 密码: postgre, 端口: 5432
 ```
 
-### 使用 pip 安装依赖（可选方案）
+### 使用 pip 安装依赖（推荐方案）
 
-如果不使用 conda，也可以使用内置 `venv` 和 `pip`：
+使用内置 `venv` 和 `pip` 安装所有依赖：
 
 ```bash
 # 1) 创建并激活虚拟环境（macOS/Linux）
@@ -140,11 +141,25 @@ pip install -r requirements.txt
 python src/data_acquisition_processor.py
 ```
 
-开发环境要求与说明：
-- Python 3.11+（建议）
-- 已安装 Google Chrome。Selenium 4.20+ 默认使用 Selenium Manager 自动下载驱动，无需手动配置 chromedriver。
-- PostgreSQL 本地可用，且账户配置与 `src/database_config.py` 中的 `DB_CONFIG` 一致。
-- 如果网络环境受限，地理编码（Nominatim）可能失败或变慢；可多次重试或离线运行仅数据库流程。
+### 使用 conda 环境（可选方案）
+
+```bash
+# 激活conda环境
+conda activate comp5339
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 运行程序
+python src/data_acquisition_processor.py
+```
+
+### 开发环境要求与说明
+
+- **Python 3.11+**（建议）
+- **Google Chrome**: Selenium 4.20+ 默认使用 Selenium Manager 自动下载驱动，无需手动配置 chromedriver
+- **PostgreSQL**: 本地可用，且账户配置与 `src/database_config.py` 中的 `DB_CONFIG` 一致
+- **网络环境**: 如果网络环境受限，地理编码（Nominatim）可能失败或变慢；可多次重试或离线运行仅数据库流程
 
 ### 运行数据获取
 
@@ -216,33 +231,44 @@ WHERE state = 'NSW';
 - [x] 代码模块化和精简
 
 ### 📊 数据统计
-- **NGER表**: 11张 (按年份)
+- **NGER表**: 11张 (按年份: 2013-14 到 2023-24)
 - **ABS表**: 15张 (按业务类型，包含两个地理级别)
-- **CER表**: 3张 (按电站类型)
+- **CER表**: 3张 (按电站类型: approved, committed, probable)
 - **总数据量**: 约60万+条记录
+- **地理编码缓存**: 自动缓存，避免重复API调用
 
 ## 项目文件说明
 
 ### 核心处理文件
-- **`src/data_acquisition_processor.py`**: 主数据获取和处理程序
+- **`src/data_acquisition_processor.py`** (521行): 主数据获取和处理程序
   - NGER数据下载和JSON处理
   - ABS Excel文件读取和合并单元格解析
   - CER网站数据爬取和分页处理
   - 统一的PostgreSQL数据存储
+  - 多线程并发处理优化
 
-- **`src/database_config.py`**: 数据库配置和操作模块
-  - 数据库连接管理
+- **`src/database_config.py`** (644行): 数据库配置和操作模块
+  - 数据库连接池管理
   - 表创建和数据插入函数
   - 列名清理和去重逻辑
   - 批量插入优化
+  - 线程安全的数据库操作
+
+- **`src/geocoding.py`** (454行): 地理编码与缓存模块
+  - Nominatim API集成
+  - 内存+文件双层缓存
+  - 多线程地理编码处理
+  - 线程安全的缓存管理
+
+- **`src/excel_utils.py`** (55行): Excel处理工具模块
+  - 合并单元格解析
+  - 多级表头处理
+  - 动态列名生成
 
 ### 数据文件
 - **`data/nger_data_api_links.csv`**: NGER数据API链接
 - **`data/14100DO0003_2011-24.xlsx`**: ABS经济数据Excel文件
-
-### 文档文件
-- **`data_dictionary.md`**: 数据字典和编码说明
-- **`README_merged_cells.md`**: Excel合并单元格处理说明
+- **`data/geocoding_cache.json`**: 地理编码持久化缓存文件
 
 ## 技术亮点
 
@@ -332,12 +358,28 @@ save_global_cache()
 - 位置: `data/geocoding_cache.json`
 - 保存策略: 直接覆盖保存，不再生成 `.backup` 文件
 
+## 项目状态
+
+### 当前版本特性
+- ✅ 完整的四模块架构 (数据获取、数据库、地理编码、Excel处理)
+- ✅ 多线程并发处理优化
+- ✅ 地理编码缓存系统
+- ✅ Excel合并单元格智能解析
+- ✅ 数据库连接池管理
+- ✅ 线程安全的操作设计
+
+### 最近更新 (2025年1月26日)
+- 📝 更新了 `requirements.txt` 依赖配置
+- 📝 完善了 README.md 文档结构
+- 📝 添加了 `excel_utils.py` 模块说明
+- 📝 更新了文件行数和项目统计信息
+
 ## 联系信息
 
 - **项目**: COMP5339 Assignment 1
-- **环境**: conda comp5339
+- **环境**: conda comp5339 或 Python venv
 - **数据库**: PostgreSQL localhost:5432
 
 ---
 
-*最后更新: 2025年9月18日*
+*最后更新: 2025年1月26日*

@@ -1,30 +1,66 @@
 #!/usr/bin/env python3
 """数据获取和处理工具"""
 
+# 标准库导入
 from pathlib import Path
+import time
+import re
+import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# 第三方库导入
 import requests
 import pandas as pd
 import openpyxl
-import time
-import re
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import queue
 
-from database_config import get_db_connection, return_db_connection, save_nger_data, save_cer_data, create_abs_table, insert_abs_data, close_connection_pool
+# 本地模块导入
+from database_config import (
+    get_db_connection, return_db_connection, save_nger_data, save_cer_data, 
+    create_abs_table, insert_abs_data, close_connection_pool, get_connection_pool,
+    create_nger_table, create_cer_tables, create_all_abs_tables, DB_CONFIG
+)
 from geocoding import add_geocoding_to_cer_data, save_global_cache
+from excel_utils import get_merged_cells, read_merged_headers
 
 # 配置
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR.mkdir(exist_ok=True)
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "COMP5339-Assignment1/1.0"})
+
+# 通用辅助函数
+def _with_db_connection(operation_func, *args, **kwargs):
+    """使用数据库连接的上下文管理器"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            print("✗数据库连接失败")
+            return False
+        return operation_func(conn, *args, **kwargs)
+    except Exception as e:
+        print(f"✗数据库操作失败: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
+
+def _print_section(title: str, symbol: str = "="):
+    """打印分节标题"""
+    print(f"\n{symbol * 20} {title} {symbol * 20}")
+
+def _print_result(operation: str, success: bool, details: str = ""):
+    """打印操作结果"""
+    symbol = "✓" if success else "✗"
+    print(f"{symbol}{operation}{f': {details}' if details else ''}")
+    return success
 
 # ============================================================================
 # 数据获取
@@ -34,7 +70,7 @@ def download_nger_year(year_data, results_queue):
     """下载NGER数据"""
     thread_id = threading.get_ident()
     year_label, url = year_data
-    conn = None
+    
     try:
         print(f"[线程{thread_id}] 下载NGER数据: {year_label}...")
         resp = requests.get(url, timeout=120, headers={"User-Agent": "COMP5339-Assignment1/1.0"})
@@ -60,42 +96,46 @@ def download_nger_year(year_data, results_queue):
         results_queue.put((year_label, False, str(e)))
         print(f"✗[线程{thread_id}] NGER数据下载失败: {year_label}: {e}")
     finally:
-        if conn:
+        if 'conn' in locals() and conn:
             return_db_connection(conn)
+
+def _process_threading_results(results_queue, total_tasks, operation_name):
+    """处理多线程结果"""
+    success_count = 0
+    while not results_queue.empty():
+        item_label, success, error = results_queue.get()
+        if error: 
+            print(f"✗{item_label}: {error}")
+            continue
+        if success:
+            success_count += 1
+    
+    print(f"✓{operation_name}处理完成: {success_count}/{total_tasks} 个任务成功")
+    return success_count > 0
 
 def fetch_nger_data(conn=None, max_workers=4):
     """多线程获取NGER数据"""
-    table = pd.read_csv(DATA_DIR / "nger_data_api_links.csv")
-    year_col = next((c for c in ["year_label", "year"] if c in table.columns), None)
-    url_col = next((c for c in ["url", "api_url", "link"] if c in table.columns), None)
-    
-    if not year_col or not url_col:
-        return False
-    
-    tasks = [(str(row[year_col]).strip(), str(row[url_col]).strip()) 
-             for _, row in table.iterrows() 
-             if str(row[url_col]).lower() != "nan"]
-    
-    print(f"开始多线程下载NGER数据 ({max_workers}线程): {len(tasks)}个年份文件")
-    
-    results_queue = queue.Queue()
-    success_count = 0
-    
     try:
+        table = pd.read_csv(DATA_DIR / "nger_data_api_links.csv")
+        year_col = next((c for c in ["year_label", "year"] if c in table.columns), None)
+        url_col = next((c for c in ["url", "api_url", "link"] if c in table.columns), None)
+        
+        if not year_col or not url_col:
+            return False
+        
+        tasks = [(str(row[year_col]).strip(), str(row[url_col]).strip()) 
+                 for _, row in table.iterrows() 
+                 if str(row[url_col]).lower() != "nan"]
+        
+        print(f"开始多线程下载NGER数据 ({max_workers}线程): {len(tasks)}个年份文件")
+        
+        results_queue = queue.Queue()
+        
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(download_nger_year, task, results_queue) for task in tasks]
             [f.result() for f in as_completed(futures)]
         
-        while not results_queue.empty():
-            year_label, success, error = results_queue.get()
-            if error: 
-                print(f"✗{year_label}: {error}")
-                continue
-            if success:
-                success_count += 1
-        
-        print(f"✓NGER数据处理完成: {success_count}/{len(tasks)} 个年份成功入库")
-        return success_count > 0
+        return _process_threading_results(results_queue, len(tasks), "NGER数据")
         
     except Exception as e:
         print(f"✗NGER数据处理失败: {e}")
@@ -112,10 +152,10 @@ def fetch_abs_data():
         with open(filepath, 'wb') as f:
             for chunk in response.iter_content(8192):
                 if chunk: f.write(chunk)
-        print("✓ABS数据下载完成")
+        _print_result("ABS数据下载", True)
         return filepath
     except Exception as e:
-        print(f"✗ABS数据下载失败: {e}")
+        _print_result("ABS数据下载", False, str(e))
         return None
 
 # ============================================================================
@@ -298,57 +338,11 @@ def fetch_cer_data():
 # Excel处理
 # ============================================================================
 
-def read_merged_headers(file_path: str, sheet_name: str) -> pd.DataFrame:
-    """读取合并表头"""
-    wb = openpyxl.load_workbook(file_path, data_only=True)
-    ws = wb[sheet_name]
-    merged_ranges = list(ws.merged_cells.ranges)
-    
-    column_names = []
-    for col in range(1, ws.max_column + 1):
-        parts = []
-        for row in [6, 7]:
-            merged_cell = next((r for r in merged_ranges 
-                              if r.min_row <= row <= r.max_row and r.min_col <= col <= r.max_col), None)
-            
-            if merged_cell:
-                cell_value = ws.cell(merged_cell.min_row, merged_cell.min_col).value
-            else:
-                cell_value = ws.cell(row, col).value
-            
-            if cell_value and str(cell_value).strip():
-                part = str(cell_value).strip()
-                if part not in parts:
-                    parts.append(part)
-        
-        column_names.append(" - ".join(parts) if parts else f"Column_{col}")
-    
-    df = pd.read_excel(file_path, sheet_name=sheet_name, header=None, skiprows=7)
-    df.columns = column_names[:len(df.columns)]
-    return df
-
-def get_merged_cells(file_path: str, sheet_name: str):
-    """获取合并单元格"""
-    wb = openpyxl.load_workbook(file_path, data_only=True)
-    ws = wb[sheet_name]
-    
-    cells = []
-    for merged_range in ws.merged_cells.ranges:
-        if merged_range.min_row == 6:
-            cell_value = ws.cell(merged_range.min_row, merged_range.min_col).value
-            if cell_value and str(cell_value).strip():
-                cells.append({
-                    'value': str(cell_value).strip(),
-                    'start_col': merged_range.min_col,
-                    'end_col': merged_range.max_col
-                })
-    return cells
 
 def process_abs_merged_cell_with_db(args):
     """处理ABS单元格并入库"""
     thread_id = threading.get_ident()
     cell, df, level_info, db_config = args
-    conn = None
     
     try:
         print(f"[线程{thread_id}] 处理ABS合并单元格: {cell['value']}")
@@ -373,8 +367,25 @@ def process_abs_merged_cell_with_db(args):
         print(f"✗[线程{thread_id}] ABS单元格处理失败: {cell['value']}: {e}")
         return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': str(e)}
     finally:
-        if conn:
+        if 'conn' in locals() and conn:
             return_db_connection(conn)
+
+def _run_threading_tasks(tasks, task_func, max_workers, operation_name):
+    """运行多线程任务的通用函数"""
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(task_func, task): task[0]['value'] if isinstance(task[0], dict) else str(task[0]) for task in tasks}
+        for future in as_completed(futures):
+            try:
+                results.append(future.result())
+            except Exception as e:
+                task_name = futures[future]
+                print(f"✗线程异常{task_name}: {e}")
+                results.append({'success': False, 'cell_name': task_name, 'error': str(e)})
+    
+    success_count = sum(1 for r in results if r['success'])
+    print(f"✓{operation_name}处理完成: {success_count}/{len(tasks)} 个任务成功")
+    return results
 
 def process_abs_data(file_path: str, conn=None, max_workers=4):
     """多线程处理ABS数据"""
@@ -393,24 +404,10 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
             df = read_merged_headers(file_path, sheet_name)
             print(f"发现{len(merged_cells)}个合并单元格, 数据{df.shape[0]}行")
             
-            from database_config import DB_CONFIG
             tasks = [(cell, df, level_info, DB_CONFIG) for cell in merged_cells]
-            
             print(f"使用{max_workers}个线程并行处理ABS数据...")
             
-            results = []
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(process_abs_merged_cell_with_db, task): task[0]['value'] for task in tasks}
-                for future in as_completed(futures):
-                    try:
-                        results.append(future.result())
-                    except Exception as e:
-                        cell_name = futures[future]
-                        print(f"✗线程异常{cell_name}: {e}")
-                        results.append({'success': False, 'cell_name': cell_name, 'error': str(e)})
-            
-            success_count = sum(1 for r in results if r['success'])
-            print(f"✓ABS表格处理完成: {sheet_name} - {success_count}/{len(merged_cells)} 个单元格成功")
+            results = _run_threading_tasks(tasks, process_abs_merged_cell_with_db, max_workers, f"ABS表格{sheet_name}")
             
             # 线程统计
             thread_stats = {}
@@ -438,6 +435,24 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
 # 主函数
 # ============================================================================
 
+def _create_table_with_retry(table_name: str, create_func, *args):
+    """创建表的重试逻辑"""
+    def _create_operation(conn):
+        return create_func(conn, *args) if args else create_func(conn)
+    
+    return _with_db_connection(_create_operation)
+
+def _print_final_results(results):
+    """打印最终结果"""
+    success = sum(results)
+    print(f"\n{'='*50}")
+    print(f"✓数据处理系统执行完成: {success}/3 个模块成功")
+    nger_symbol = '✓' if results[0] else '✗'
+    abs_symbol = '✓' if results[1] else '✗'
+    cer_symbol = '✓' if results[2] else '✗'
+    print(f"NGER: {nger_symbol}  |  ABS: {abs_symbol}  |  CER: {cer_symbol}")
+    print(f"{'='*50}")
+
 def main():
     """主函数"""
     print("=" * 50)
@@ -446,32 +461,49 @@ def main():
     print("=" * 50)
     
     # 初始化连接池
-    from database_config import get_connection_pool
     pool = get_connection_pool(minconn=2, maxconn=15)
     if not pool:
         print("✗数据库连接池初始化失败")
         return
     
     try:
-        print("\n=== 1. NGER数据获取和处理 ===")
+        print("先创建数据表，再获取、处理数据...")
+        
+        # 创建NGER表
+        _print_section("1. 创建NGER表")
+        nger_table_ok = _create_table_with_retry("NGER表", create_nger_table)
+        if not _print_result("NGER表准备", nger_table_ok):
+            return
+        
+        # NGER数据获取和处理
+        _print_section("2. NGER数据获取和处理")
         nger_ok = fetch_nger_data(max_workers=10)
         
-        print("\n=== 2. ABS经济数据获取和处理 ===")
-        abs_file = fetch_abs_data()
-        abs_ok = process_abs_data(str(abs_file), max_workers=10) if abs_file else False
+        # 创建CER表
+        _print_section("3. 创建CER表")
+        cer_table_ok = _create_table_with_retry("CER表", create_cer_tables)
+        if not _print_result("CER表准备", cer_table_ok):
+            return
         
-        print("\n=== 3. CER电站数据获取和处理 ===")
+        # CER电站数据获取和处理
+        _print_section("4. CER电站数据获取和处理")
         cer_ok = fetch_cer_data()
+    
+        # ABS数据处理
+        abs_file = fetch_abs_data()
+        if abs_file:
+            _print_section("5. 创建ABS表")
+            abs_table_ok = _create_table_with_retry("ABS表", create_all_abs_tables, str(abs_file))
+            if not _print_result("ABS表准备", abs_table_ok):
+                return
+            
+            _print_section("6. ABS经济数据获取和处理")
+            abs_ok = process_abs_data(str(abs_file), max_workers=10)
+        else:
+            abs_ok = False
         
-        results = [nger_ok, abs_ok, cer_ok]
-        success = sum(results)
-        print(f"\n{'='*50}")
-        print(f"✓数据处理系统执行完成: {success}/3 个模块成功")
-        nger_symbol = '✓' if nger_ok else '✗'
-        abs_symbol = '✓' if abs_ok else '✗'
-        cer_symbol = '✓' if cer_ok else '✗'
-        print(f"NGER: {nger_symbol}  |  ABS: {abs_symbol}  |  CER: {cer_symbol}")
-        print(f"{'='*50}")
+        # 打印最终结果
+        _print_final_results([nger_ok, abs_ok, cer_ok])
         
         # 保存地理编码缓存
         print("正在保存地理编码缓存...")
