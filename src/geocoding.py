@@ -399,15 +399,18 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
                         'error': str(e)
                     })
         
-        # 更新DataFrame
+        # 线程安全地更新DataFrame
         print(f"\\n正在更新DataFrame...")
-        for result in results:
-            if result['success'] and result['result']:
-                idx = result['idx']
-                geocode_result = result['result']
-                
-                for col in geocode_columns:
-                    df.at[idx, col] = geocode_result.get(col)
+        df_lock = threading.Lock()
+        
+        with df_lock:
+            for result in results:
+                if result['success'] and result['result']:
+                    idx = result['idx']
+                    geocode_result = result['result']
+                    
+                    for col in geocode_columns:
+                        df.at[idx, col] = geocode_result.get(col)
         
         # 保存持久化缓存
         print("正在保存地理编码缓存...")

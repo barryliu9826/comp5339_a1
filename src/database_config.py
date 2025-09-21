@@ -2,17 +2,77 @@
 """数据库配置和操作"""
 
 import psycopg2
+import psycopg2.pool
 import pandas as pd
 import numpy as np
 from typing import List
+import threading
+import time
 
 DB_CONFIG = {
     'host': 'localhost', 'port': 5432, 'user': 'postgres', 
     'password': 'postgre', 'database': 'postgres'
 }
 
+# 全局连接池
+_connection_pool = None
+_pool_lock = threading.Lock()
+
+def get_connection_pool(minconn=1, maxconn=10):
+    """获取数据库连接池（单例模式）"""
+    global _connection_pool
+    
+    if _connection_pool is None:
+        with _pool_lock:
+            if _connection_pool is None:
+                try:
+                    _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                        minconn=minconn,
+                        maxconn=maxconn,
+                        **DB_CONFIG
+                    )
+                    print(f"✓PostgreSQL连接池创建成功: {minconn}-{maxconn}个连接")
+                except Exception as e:
+                    print(f"✗PostgreSQL连接池创建失败: {e}")
+                    return None
+    
+    return _connection_pool
+
 def get_db_connection():
-    """获取数据库连接"""
+    """获取数据库连接（从连接池）"""
+    pool = get_connection_pool()
+    if not pool:
+        return None
+    
+    try:
+        conn = pool.getconn()
+        if conn:
+            # 测试连接是否有效
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            return conn
+    except Exception as e:
+        print(f"✗从连接池获取连接失败: {e}")
+        return None
+
+def return_db_connection(conn):
+    """归还数据库连接到连接池"""
+    if conn and _connection_pool:
+        try:
+            _connection_pool.putconn(conn)
+        except Exception as e:
+            print(f"✗归还连接到连接池失败: {e}")
+
+def close_connection_pool():
+    """关闭连接池"""
+    global _connection_pool
+    if _connection_pool:
+        _connection_pool.closeall()
+        _connection_pool = None
+        print("✓数据库连接池已关闭")
+
+def get_db_connection_legacy():
+    """获取数据库连接（传统方式，向后兼容）"""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         print("✓PostgreSQL数据库连接成功")

@@ -17,7 +17,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import queue
 
-from database_config import get_db_connection, save_nger_data, save_cer_data, create_abs_table, insert_abs_data
+from database_config import get_db_connection, return_db_connection, save_nger_data, save_cer_data, create_abs_table, insert_abs_data, close_connection_pool
 from geocoding import add_geocoding_to_cer_data, save_global_cache
 
 # 配置
@@ -34,6 +34,7 @@ def download_nger_year(year_data, results_queue):
     """下载NGER数据"""
     thread_id = threading.get_ident()
     year_label, url = year_data
+    conn = None
     try:
         print(f"[线程{thread_id}] 下载NGER数据: {year_label}...")
         resp = requests.get(url, timeout=120, headers={"User-Agent": "COMP5339-Assignment1/1.0"})
@@ -42,13 +43,25 @@ def download_nger_year(year_data, results_queue):
         if "json" in resp.headers.get("Content-Type", "") or resp.text.strip().startswith("["):
             data = resp.json()
             df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
-            results_queue.put((year_label, df, None))
-            print(f"✓[线程{thread_id}] NGER数据下载完成: {year_label}")
+            
+            # 在线程中直接处理数据库操作
+            conn = get_db_connection()
+            if conn and df is not None and not df.empty:
+                if save_nger_data(conn, year_label, df):
+                    results_queue.put((year_label, True, None))
+                    print(f"✓[线程{thread_id}] NGER数据下载和入库完成: {year_label}")
+                else:
+                    results_queue.put((year_label, False, "数据库入库失败"))
+            else:
+                results_queue.put((year_label, False, "数据库连接失败"))
         else:
-            results_queue.put((year_label, None, "格式错误"))
+            results_queue.put((year_label, False, "格式错误"))
     except Exception as e:
-        results_queue.put((year_label, None, str(e)))
+        results_queue.put((year_label, False, str(e)))
         print(f"✗[线程{thread_id}] NGER数据下载失败: {year_label}: {e}")
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 def fetch_nger_data(conn=None, max_workers=4):
     """多线程获取NGER数据"""
@@ -59,19 +72,14 @@ def fetch_nger_data(conn=None, max_workers=4):
     if not year_col or not url_col:
         return False
     
-    should_close = conn is None
-    if conn is None:
-        conn = get_db_connection()
-        if not conn:
-            return False
-    
     tasks = [(str(row[year_col]).strip(), str(row[url_col]).strip()) 
              for _, row in table.iterrows() 
              if str(row[url_col]).lower() != "nan"]
     
     print(f"开始多线程下载NGER数据 ({max_workers}线程): {len(tasks)}个年份文件")
     
-    results_queue, success_count = queue.Queue(), 0
+    results_queue = queue.Queue()
+    success_count = 0
     
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -79,20 +87,18 @@ def fetch_nger_data(conn=None, max_workers=4):
             [f.result() for f in as_completed(futures)]
         
         while not results_queue.empty():
-            year_label, df, error = results_queue.get()
+            year_label, success, error = results_queue.get()
             if error: 
                 print(f"✗{year_label}: {error}")
                 continue
-            if df is not None and not df.empty and save_nger_data(conn, year_label, df):
+            if success:
                 success_count += 1
         
-        if should_close: conn.close()
         print(f"✓NGER数据处理完成: {success_count}/{len(tasks)} 个年份成功入库")
         return success_count > 0
         
     except Exception as e:
         print(f"✗NGER数据处理失败: {e}")
-        if should_close and conn: conn.close()
         return False
 
 def fetch_abs_data():
@@ -233,18 +239,16 @@ def scrape_paginated_table(driver, table_element, table_type):
         return result
     return pd.DataFrame()
 
-def fetch_cer_data(conn=None):
+def fetch_cer_data():
     """爬取CER数据"""
     driver = setup_driver()
     if not driver:
         return False
     
-    should_close = conn is None
-    if conn is None:
-        conn = get_db_connection()
-        if not conn:
-            driver.quit()
-            return False
+    conn = get_db_connection()
+    if not conn:
+        driver.quit()
+        return False
     
     try:
         driver.get("https://cer.gov.au/markets/reports-and-data/large-scale-renewable-energy-data")
@@ -279,15 +283,15 @@ def fetch_cer_data(conn=None):
             except Exception as e:
                 print(f"  ✗CER表格{i+1}处理失败: {e}")
         
-        if should_close: conn.close()
         print(f"✓CER数据处理完成: {success_count}个表格成功入库")
         return success_count > 0
         
     except Exception as e:
         print(f"✗CER数据处理失败: {e}")
-        if should_close and conn: conn.close()
         return False
     finally:
+        if conn:
+            return_db_connection(conn)
         driver.quit()
 
 # ============================================================================
@@ -344,39 +348,36 @@ def process_abs_merged_cell_with_db(args):
     """处理ABS单元格并入库"""
     thread_id = threading.get_ident()
     cell, df, level_info, db_config = args
+    conn = None
     
     try:
         print(f"[线程{thread_id}] 处理ABS合并单元格: {cell['value']}")
-        import psycopg2
-        thread_conn = psycopg2.connect(**db_config)
+        conn = get_db_connection()
         
-        try:
-            start_col, end_col = cell['start_col'] - 1, cell['end_col']
-            selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col:end_col])
-            subset_df = df[selected_cols].copy()
-            
-            table_name = create_abs_table(thread_conn, cell['value'], selected_cols)
-            if table_name and insert_abs_data(thread_conn, table_name, subset_df, level_info['level']):
-                print(f"✓[线程{thread_id}] ABS数据入库成功: {cell['value']}")
-                return {'success': True, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': None}
-            else:
-                print(f"✗[线程{thread_id}] ABS数据入库失败: {cell['value']}")
-                return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': '入库失败'}
-        finally:
-            thread_conn.close()
+        if not conn:
+            return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': '数据库连接失败'}
+        
+        start_col, end_col = cell['start_col'] - 1, cell['end_col']
+        selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col:end_col])
+        subset_df = df[selected_cols].copy()
+        
+        table_name = create_abs_table(conn, cell['value'], selected_cols)
+        if table_name and insert_abs_data(conn, table_name, subset_df, level_info['level']):
+            print(f"✓[线程{thread_id}] ABS数据入库成功: {cell['value']}")
+            return {'success': True, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': None}
+        else:
+            print(f"✗[线程{thread_id}] ABS数据入库失败: {cell['value']}")
+            return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': '入库失败'}
         
     except Exception as e:
         print(f"✗[线程{thread_id}] ABS单元格处理失败: {cell['value']}: {e}")
         return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': str(e)}
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 def process_abs_data(file_path: str, conn=None, max_workers=4):
     """多线程处理ABS数据"""
-    should_close = conn is None
-    if conn is None:
-        conn = get_db_connection()
-        if not conn:
-            return False
-    
     try:
         # 地理级别定义
         levels = {
@@ -426,13 +427,11 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
             for tid, stats in thread_stats.items():
                 print(f"  线程{tid}: {stats['success']}/{stats['success']+stats['failed']}")
         
-        if should_close: conn.close()
         print("✓ABS数据处理全部完成")
         return True
         
     except Exception as e:
         print(f"✗ABS数据处理失败: {e}")
-        if should_close and conn: conn.close()
         return False
 
 # ============================================================================
@@ -446,21 +445,23 @@ def main():
     print("NGER数据 + ABS经济数据 + CER电站数据")
     print("=" * 50)
     
-    conn = get_db_connection()
-    if not conn:
-        print("✗数据库连接失败")
+    # 初始化连接池
+    from database_config import get_connection_pool
+    pool = get_connection_pool(minconn=2, maxconn=15)
+    if not pool:
+        print("✗数据库连接池初始化失败")
         return
     
     try:
         print("\n=== 1. NGER数据获取和处理 ===")
-        nger_ok = fetch_nger_data(conn, max_workers=10)
+        nger_ok = fetch_nger_data(max_workers=10)
         
         print("\n=== 2. ABS经济数据获取和处理 ===")
         abs_file = fetch_abs_data()
-        abs_ok = process_abs_data(str(abs_file), conn, max_workers=10) if abs_file else False
+        abs_ok = process_abs_data(str(abs_file), max_workers=10) if abs_file else False
         
         print("\n=== 3. CER电站数据获取和处理 ===")
-        cer_ok = fetch_cer_data(conn)
+        cer_ok = fetch_cer_data()
         
         results = [nger_ok, abs_ok, cer_ok]
         success = sum(results)
@@ -481,7 +482,8 @@ def main():
             print(f"✗保存地理编码缓存失败: {e}")
         
     finally:
-        if conn: conn.close()
+        # 关闭连接池
+        close_connection_pool()
 
 if __name__ == "__main__":
     main()
