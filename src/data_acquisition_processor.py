@@ -437,10 +437,23 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
 
 def _create_table_with_retry(table_name: str, create_func, *args):
     """创建表的重试逻辑"""
-    def _create_operation(conn):
-        return create_func(conn, *args) if args else create_func(conn)
-    
-    return _with_db_connection(_create_operation)
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            print("✗数据库连接失败")
+            return False
+        
+        if args:
+            return create_func(conn, *args)
+        else:
+            return create_func(conn)
+    except Exception as e:
+        print(f"✗创建{table_name}失败: {e}")
+        return False
+    finally:
+        if conn:
+            return_db_connection(conn)
 
 def _print_final_results(results):
     """打印最终结果"""
