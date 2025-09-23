@@ -26,7 +26,7 @@ from database_config import (
     create_abs_table, insert_abs_data, close_connection_pool, get_connection_pool,
     create_nger_table, create_cer_tables, create_all_abs_tables, DB_CONFIG
 )
-from geocoding import add_geocoding_to_cer_data, add_geocoding_to_nger_data, save_global_cache
+from geocoding import add_geocoding_to_cer_data, add_geocoding_to_nger_data, save_global_cache, initialize_geocoding_cache
 from excel_utils import get_merged_cells, read_merged_headers
 
 # 配置
@@ -62,12 +62,17 @@ def download_nger_year(year_data, results_queue):
         if "json" in resp.headers.get("Content-Type", "") or resp.text.strip().startswith("["):
             data = resp.json()
             df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
+            # 统一列名为小写，去除首尾空格，避免字段映射缺失
+            try:
+                df.columns = [str(c).strip().lower() for c in df.columns]
+            except Exception:
+                pass
             
             # 在线程中直接处理数据库操作
             try:
                 # 在入库前先对NGER数据做地理编码增强
                 if df is not None and not df.empty:
-                    df = add_geocoding_to_nger_data(df, max_workers=5)
+                    df = add_geocoding_to_nger_data(df, max_workers=1)
             except Exception as e:
                 print(f"  ⚠NGER地理编码增强失败，继续入库原始数据: {e}")
 
@@ -103,7 +108,7 @@ def process_threading_results(results_queue, total_tasks, operation_name):
     print(f"✓{operation_name}处理完成: {success_count}/{total_tasks} 个任务成功")
     return success_count > 0
 
-def fetch_nger_data(conn=None, max_workers=1):
+def fetch_nger_data(max_workers=1):
     """多线程获取NGER数据"""
     try:
         table = pd.read_csv(DATA_DIR / "nger_data_api_links.csv")
@@ -269,7 +274,7 @@ def scrape_paginated_table(driver, table_element, table_type):
         return result
     return pd.DataFrame()
 
-def fetch_cer_data():
+def fetch_cer_data(max_workers=1):
     """爬取CER数据"""
     driver = setup_driver()
     if not driver:
@@ -304,7 +309,7 @@ def fetch_cer_data():
                 if df_result.empty: continue
                 
                 print(f"  对CER数据进行多线程地理编码...")
-                df_geocoded = add_geocoding_to_cer_data(df_result, table_type, max_workers=10)
+                df_geocoded = add_geocoding_to_cer_data(df_result, table_type, max_workers)
                 
                 if save_cer_data(conn, table_type, df_geocoded):
                     success_count += 1
@@ -425,8 +430,8 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
 # 主函数
 # ============================================================================
 
-def create_table_with_retry(table_name: str, create_func, *args):
-    """创建表的重试逻辑"""
+def create_table_direct(table_name: str, create_func, *args):
+    """直接创建表"""
     conn = None
     try:
         conn = get_db_connection()
@@ -463,6 +468,12 @@ def main():
     print("NGER数据 + ABS经济数据 + CER电站数据")
     print("=" * 50)
     
+    # 初始化地理编码缓存（提前加载缓存，减少API调用与磁盘I/O竞争）
+    try:
+        initialize_geocoding_cache(str(DATA_DIR / "geocoding_cache.json"))
+    except Exception as e:
+        print(f"⚠地理编码缓存初始化失败: {e}")
+    
     # 初始化连接池
     pool = get_connection_pool(minconn=2, maxconn=15)
     if not pool:
@@ -474,17 +485,17 @@ def main():
         
         # 创建NGER表
         print_section("1. 创建NGER表")
-        nger_table_ok = create_table_with_retry("NGER表", create_nger_table)
+        nger_table_ok = create_table_direct("NGER表", create_nger_table)
         if not print_result("NGER表准备", nger_table_ok):
             return
         
         # NGER数据获取和处理
         print_section("2. NGER数据获取和处理")
-        nger_ok = fetch_nger_data()
+        nger_ok = fetch_nger_data(max_workers=1)
         
         # 创建CER表
         print_section("3. 创建CER表")
-        cer_table_ok = create_table_with_retry("CER表", create_cer_tables)
+        cer_table_ok = create_table_direct("CER表", create_cer_tables)
         if not print_result("CER表准备", cer_table_ok):
             return
         
@@ -496,7 +507,7 @@ def main():
         abs_file = fetch_abs_data()
         if abs_file:
             print_section("5. 创建ABS表")
-            abs_table_ok = create_table_with_retry("ABS表", create_all_abs_tables, str(abs_file))
+            abs_table_ok = create_table_direct("ABS表", create_all_abs_tables, str(abs_file))
             if not print_result("ABS表准备", abs_table_ok):
                 return
             

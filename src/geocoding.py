@@ -10,6 +10,69 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import hashlib
 from pathlib import Path
+import os
+from datetime import datetime, timedelta
+
+# 直接在此处填写你的 Google Maps API Key（仅用于本地/作业环境）。
+# 注意：不要把真实密钥提交到公共仓库或共享。
+HARDCODED_GOOGLE_MAPS_API_KEY = "AIzaSyCC2cyWU43T_MF4As54r2sn6E-rHvhb6Pk"
+
+# ============================================================================
+# Google Maps API 配额管理器
+# ============================================================================
+
+class GoogleMapsQuotaManager:
+    """Google Maps API配额和速率限制管理器"""
+    
+    def __init__(self, daily_limit: int = 10000, requests_per_second: float = 1.0):
+        self.daily_limit = daily_limit
+        self.requests_per_second = requests_per_second
+        self.request_count = 0
+        self.last_request_time = 0
+        self.current_date = datetime.now().date()
+        self.lock = threading.RLock()
+        
+    def can_make_request(self) -> bool:
+        """检查是否可以发起请求"""
+        with self.lock:
+            # 检查是否是新的一天，如果是则重置计数器
+            today = datetime.now().date()
+            if today != self.current_date:
+                self.current_date = today
+                self.request_count = 0
+            
+            # 检查日配额
+            if self.request_count >= self.daily_limit:
+                print(f"⚠️ 已达到Google Maps API日配额限制: {self.request_count}/{self.daily_limit}")
+                return False
+            
+            return True
+    
+    def wait_for_rate_limit(self):
+        """等待速率限制"""
+        with self.lock:
+            current_time = time.time()
+            time_since_last = current_time - self.last_request_time
+            min_interval = 1.0 / self.requests_per_second
+            
+            if time_since_last < min_interval:
+                sleep_time = min_interval - time_since_last
+                print(f"  [速率限制] 等待 {sleep_time:.2f}s...")
+                time.sleep(sleep_time)
+            
+            self.last_request_time = time.time()
+            self.request_count += 1
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """获取配额统计"""
+        with self.lock:
+            return {
+                'date': str(self.current_date),
+                'requests_made': self.request_count,
+                'daily_limit': self.daily_limit,
+                'remaining': max(0, self.daily_limit - self.request_count),
+                'usage_percent': (self.request_count / self.daily_limit) * 100
+            }
 
 # ============================================================================
 # 地理编码缓存管理器
@@ -174,8 +237,8 @@ def geocode_single_station(args):
         name = row.get('Power station name', row.get('Project Name', 'Unknown'))
         print(f"  [线程{thread_id}] 处理第{idx+1}个电站: {name}")
         
-        # 创建线程专用的地理编码器
-        geocoder = Geocoder()
+        # 创建线程专用的地理编码器（优先使用硬编码Key，留空则回退到环境变量）
+        geocoder = Geocoder(api_key=HARDCODED_GOOGLE_MAPS_API_KEY or None)
         geocode_result = geocoder.geocode_power_station(row, table_type)
         
         return {
@@ -194,10 +257,10 @@ def geocode_single_station(args):
         }
 
 # 地理编码列定义
-GEOCODE_COLUMNS = ['lat', 'lon', 'formatted_address', 'place_id', 'osm_type', 'osm_id',
-                  'confidence', 'match_type', 'locality', 'postcode', 'state_full', 
-                  'country', 'geocode_query', 'geocode_provider',
-                  'bbox_south', 'bbox_north', 'bbox_west', 'bbox_east', 'polygon_geojson']
+GEOCODE_COLUMNS = [
+    'lat', 'lon', 'formatted_address', 'place_id', 'postcode',
+    'bbox_south', 'bbox_north', 'bbox_west', 'bbox_east'
+]
 
 def initialize_geocode_columns(df: pd.DataFrame) -> None:
     """初始化地理编码列"""
@@ -295,7 +358,7 @@ def geocode_single_nger(args):
         name = row.get('facilityname', 'Unknown')
         print(f"  [线程{thread_id}] 处理第{idx+1}个设施: {name}")
 
-        geocoder = Geocoder()
+        geocoder = Geocoder(api_key=HARDCODED_GOOGLE_MAPS_API_KEY or None)
         geocode_result = geocoder.geocode_nger(row)
 
         return {
@@ -349,19 +412,35 @@ def add_geocoding_to_nger_data(df: pd.DataFrame, max_workers: int = 5) -> pd.Dat
 # ============================================================================
 
 class Geocoder:
-    """地理编码器"""
+    """地理编码器 - Google Maps API版本"""
     
-    def __init__(self, use_persistent_cache: bool = True):
+    def __init__(self, use_persistent_cache: bool = True, api_key: str = None):
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'COMP5339-Assignment1/1.0'})
-        self.base_url = "https://nominatim.openstreetmap.org/search"
+        
+        # Google Maps Geocoding API配置
+        self.base_url = "https://maps.googleapis.com/maps/api/geocode/json"
+        self.api_key = api_key or os.getenv('GOOGLE_MAPS_API_KEY')
+        
+        if not self.api_key:
+            raise ValueError("Google Maps API key is required. Set GOOGLE_MAPS_API_KEY environment variable or pass api_key parameter.")
+        
+        # 缓存配置
         self.cache = {}  # 内存缓存（用于快速访问）
         self.use_persistent_cache = use_persistent_cache
-        # 使用全局缓存（应该在程序启动时通过initialize_geocoding_cache()预加载）
         self.persistent_cache = get_global_cache() if use_persistent_cache else None
         
+        # 配额管理器（Essentials级别：每月10,000次免费）
+        self.quota_manager = GoogleMapsQuotaManager(daily_limit=10000, requests_per_second=1.0)
+        
+        print(f"✓ Google Maps Geocoding API已初始化，日配额: {self.quota_manager.daily_limit}")
+    
+    def get_quota_stats(self) -> Dict[str, Any]:
+        """获取配额统计信息"""
+        return self.quota_manager.get_stats()
+        
     def geocode_query(self, query: str) -> Optional[Dict]:
-        """执行地理编码查询（带指数退避重试，对于瞬时网络错误不缓存失败）。"""
+        """执行地理编码查询（Google Maps API版本）"""
         # 1. 首先检查内存缓存
         if query in self.cache:
             print(f"  [缓存命中-内存] 查询: {query}")
@@ -375,102 +454,96 @@ class Geocoder:
                 print(f"  [缓存命中-持久化] 查询: {query}")
                 return cached_result
 
-        print(f"  [API调用] 查询: {query}")
+        # 3. 检查配额限制
+        if not self.quota_manager.can_make_request():
+            print(f"  [配额限制] 跳过查询: {query}")
+            return None
+
+        # 4. 速率限制
+        self.quota_manager.wait_for_rate_limit()
+
+        print(f"  [Google API调用] 查询: {query}")
         params = {
-            'q': query,
-            'format': 'json',
-            'limit': 1,
-            'countrycodes': 'au',
-            'addressdetails': 1,
-            'polygon_geojson': 1
+            'address': query,
+            'key': self.api_key,
+            'region': 'au',  # 偏向澳大利亚结果
+            'language': 'en'
         }
 
-        max_retries = 3
-        backoff_factor = 1.6
-        delay_seconds = 1.1  # 起始延迟，同时也用于礼貌限速
+        try:
+            response = self.session.get(self.base_url, params=params, timeout=30)
+            response.raise_for_status()
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                response = self.session.get(self.base_url, params=params, timeout=10)
-                status_code = response.status_code
-                # 对于5xx与429进行重试
-                if status_code in (429,) or 500 <= status_code < 600:
-                    raise requests.HTTPError(f"HTTP {status_code}")
-
-                response.raise_for_status()
-
-                results = response.json()
-                if results:
-                    result = results[0]
-                    geocode_result = {
-                        'lat': float(result.get('lat', 0)),
-                        'lon': float(result.get('lon', 0)),
-                        'formatted_address': result.get('display_name', ''),
-                        'place_id': result.get('place_id', ''),
-                        'osm_type': result.get('osm_type', ''),
-                        'osm_id': result.get('osm_id', ''),
-                        'confidence': float(result.get('importance', 0)),
-                        'match_type': result.get('type', ''),
-                        'locality': result.get('address', {}).get('suburb', ''),
-                        'postcode': result.get('address', {}).get('postcode', ''),
-                        'state_full': result.get('address', {}).get('state', ''),
-                        'country': result.get('address', {}).get('country', ''),
-                        'geocode_query': query,
-                        'geocode_provider': 'nominatim'
-                    }
-
-                    # 解析boundingbox与polygon_geojson
-                    try:
-                        bbox = result.get('boundingbox')
-                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                            south, north, west, east = bbox
-                            geocode_result.update({
-                                'bbox_south': float(south),
-                                'bbox_north': float(north),
-                                'bbox_west': float(west),
-                                'bbox_east': float(east)
-                            })
-                    except Exception:
-                        pass
-
-                    try:
-                        geojson_obj = result.get('geojson')
-                        if geojson_obj is not None:
-                            geocode_result['polygon_geojson'] = json.dumps(geojson_obj, ensure_ascii=False)
-                    except Exception:
-                        pass
-
-                    # 保存缓存（成功）
-                    self.cache[query] = geocode_result
-                    if self.use_persistent_cache and self.persistent_cache:
-                        self.persistent_cache.set(query, geocode_result)
-
-                    print(f"  [API成功] 查询: {query} -> {result.get('display_name', 'N/A')}")
-                    time.sleep(1.1)  # 成功后也保持礼貌延迟
-                    return geocode_result
-                else:
-                    # 空结果应缓存为None（数据层面失败，不是网络故障）
+            data = response.json()
+            
+            # 检查API状态
+            if data.get('status') != 'OK':
+                if data.get('status') == 'ZERO_RESULTS':
+                    # 无结果，缓存None
                     self.cache[query] = None
                     if self.use_persistent_cache and self.persistent_cache:
                         self.persistent_cache.set_none(query)
-                    print(f"  [API无结果] 查询: {query}")
-                    time.sleep(1.1)
+                    print(f"  [Google API无结果] 查询: {query}")
+                    return None
+                else:
+                    # 其他错误状态
+                    error_msg = data.get('error_message', data.get('status', 'Unknown error'))
+                    print(f"  [Google API错误] 查询: {query} -> {error_msg}")
                     return None
 
-            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as e:
-                # 瞬时错误：重试且不写入失败缓存
-                print(f"  [API失败-可重试] 查询: {query} -> 错误: {e} (第{attempt}/{max_retries}次)")
-                if attempt < max_retries:
-                    time.sleep(delay_seconds)
-                    delay_seconds *= backoff_factor
-                    continue
-                else:
-                    print(f"  [API失败-放弃] 查询: {query} -> 已达到最大重试次数")
-                    return None
-            except Exception as e:
-                # 非预期错误：不缓存失败，直接返回
-                print(f"  [API失败-非预期] 查询: {query} -> 错误: {e}")
+            results = data.get('results', [])
+            if results:
+                result = results[0]  # 取第一个结果
+                location = result.get('geometry', {}).get('location', {})
+                
+                geocode_result = {
+                    'lat': float(location.get('lat', 0)),
+                    'lon': float(location.get('lng', 0)),
+                    'formatted_address': result.get('formatted_address', ''),
+                    'place_id': result.get('place_id', ''),
+                    'postcode': ''  # 从address_components中提取
+                }
+
+                # 提取邮编
+                for component in result.get('address_components', []):
+                    if 'postal_code' in component.get('types', []):
+                        geocode_result['postcode'] = component.get('long_name', '')
+                        break
+
+                # 解析边界框（如果有）
+                try:
+                    viewport = result.get('geometry', {}).get('viewport', {})
+                    if viewport:
+                        northeast = viewport.get('northeast', {})
+                        southwest = viewport.get('southwest', {})
+                        if northeast and southwest:
+                            geocode_result.update({
+                                'bbox_south': float(southwest.get('lat', 0)),
+                                'bbox_north': float(northeast.get('lat', 0)),
+                                'bbox_west': float(southwest.get('lng', 0)),
+                                'bbox_east': float(northeast.get('lng', 0))
+                            })
+                except Exception:
+                    pass
+
+                # 保存缓存（成功）
+                self.cache[query] = geocode_result
+                if self.use_persistent_cache and self.persistent_cache:
+                    self.persistent_cache.set(query, geocode_result)
+
+                print(f"  [Google API成功] 查询: {query} -> {result.get('formatted_address', 'N/A')}")
+                return geocode_result
+            else:
+                # 空结果
+                self.cache[query] = None
+                if self.use_persistent_cache and self.persistent_cache:
+                    self.persistent_cache.set_none(query)
+                print(f"  [Google API无结果] 查询: {query}")
                 return None
+
+        except Exception as e:
+            print(f"  [Google API失败] 查询: {query} -> 错误: {e}")
+            return None
     
     def build_geocode_queries(self, row: pd.Series, table_type: str) -> list:
         """构建地理编码查询列表"""
@@ -544,9 +617,8 @@ class Geocoder:
     
     def geocode_power_station(self, row: pd.Series, table_type: str) -> Dict:
         """对电站进行地理编码"""
-        geocode_result = {'lat': None, 'lon': None, 'formatted_address': None, 'place_id': None, 'osm_type': None, 'osm_id': None,
-                         'confidence': None, 'match_type': None, 'locality': None, 'postcode': None, 'state_full': None, 'country': None,
-                         'geocode_query': None, 'geocode_provider': None}
+        geocode_result = {'lat': None, 'lon': None, 'formatted_address': None, 'place_id': None, 'postcode': None,
+                         'bbox_south': None, 'bbox_north': None, 'bbox_west': None, 'bbox_east': None}
         
         queries = self.build_geocode_queries(row, table_type)
         print(f"  准备尝试 {len(queries)} 个地理编码查询...")
@@ -613,9 +685,8 @@ class Geocoder:
     
     def geocode_nger(self, row: pd.Series) -> Dict:
         """对电站进行地理编码"""
-        geocode_result = {'lat': None, 'lon': None, 'formatted_address': None, 'place_id': None, 'osm_type': None, 'osm_id': None,
-                         'confidence': None, 'match_type': None, 'locality': None, 'postcode': None, 'state_full': None, 'country': None,
-                         'geocode_query': None, 'geocode_provider': None}
+        geocode_result = {'lat': None, 'lon': None, 'formatted_address': None, 'place_id': None, 'postcode': None,
+                         'bbox_south': None, 'bbox_north': None, 'bbox_west': None, 'bbox_east': None}
         
         queries = self.build_nger_queries(row)
         print(f"  准备尝试 {len(queries)} 个地理编码查询...")

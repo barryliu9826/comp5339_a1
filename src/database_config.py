@@ -232,16 +232,11 @@ def create_nger_table_impl(cursor):
         lon NUMERIC,
         formatted_address TEXT,
         place_id TEXT,
-        osm_type TEXT,
-        osm_id TEXT,
-        confidence NUMERIC,
-        match_type TEXT,
-        locality TEXT,
         postcode TEXT,
-        state_full TEXT,
-        country TEXT,
-        geocode_query TEXT,
-        geocode_provider TEXT
+        bbox_south NUMERIC,
+        bbox_north NUMERIC,
+        bbox_west NUMERIC,
+        bbox_east NUMERIC
     );
     """
     ok = create_table_safe(cursor, 'nger_unified', create_sql)
@@ -470,12 +465,17 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
         }
         
         # 确保地理编码列存在（即使表已存在）
-        geocode_fields = {'lat': 'NUMERIC', 'lon': 'NUMERIC', 'formatted_address': 'TEXT', 'place_id': 'TEXT',
-                          'osm_type': 'TEXT', 'osm_id': 'TEXT', 'confidence': 'NUMERIC', 'match_type': 'TEXT',
-                          'locality': 'TEXT', 'postcode': 'TEXT', 'state_full': 'TEXT', 'country': 'TEXT',
-                          'geocode_query': 'TEXT', 'geocode_provider': 'TEXT',
-                          'bbox_south': 'NUMERIC', 'bbox_north': 'NUMERIC', 'bbox_west': 'NUMERIC', 'bbox_east': 'NUMERIC',
-                          'polygon_geojson': 'TEXT'}
+        geocode_fields = {
+            'lat': 'NUMERIC',
+            'lon': 'NUMERIC',
+            'formatted_address': 'TEXT',
+            'place_id': 'TEXT',
+            'postcode': 'TEXT',
+            'bbox_south': 'NUMERIC',
+            'bbox_north': 'NUMERIC',
+            'bbox_west': 'NUMERIC',
+            'bbox_east': 'NUMERIC'
+        }
 
         for col_name, col_type in geocode_fields.items():
             try:
@@ -500,10 +500,10 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
                     return value
                 s = str(value).strip().lower()
                 truthy = {
-                    'true', 'yes', '1', 'y', 't', 'connected', 'on-grid', 'on grid', 'ongrid', 'ON'
+                    'true', 'yes', '1', 'y', 't', 'connected', 'on-grid', 'on grid', 'ongrid', 'on'
                 }
                 falsy = {
-                    'false', 'no', '0', 'n', 'f', 'not connected', 'disconnected', 'off-grid', 'off grid', 'offgrid', 'OFF'
+                    'false', 'no', '0', 'n', 'f', 'not connected', 'disconnected', 'off-grid', 'off grid', 'offgrid', 'off'
                 }
                 if s in truthy:
                     return True
@@ -528,7 +528,9 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
                 for source_col in source_cols:
                     if source_col in df.columns:
                         val = row.get(source_col)
-                        if val and not pd.isna(val) and str(val).strip():
+                        # 不要用 truthiness 过滤，否则会把 False/0 当作空值
+                        has_value = (val is not None) and (not pd.isna(val)) and (str(val).strip() != '')
+                        if has_value:
                             if target_col == 'grid_connected':
                                 value = _parse_bool(val)
                             elif target_col.endswith(('_gj', '_mwh', '_tco2e')):
@@ -565,8 +567,8 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
         # 插入完成后生成/更新geom列
         try:
             ensure_geometry_column_and_index(cursor, 'nger_unified', 'lat', 'lon', 'geom')
-            ensure_area_and_bbox_geometries(cursor, 'nger_unified', 'polygon_geojson',
-                                            'bbox_west', 'bbox_south', 'bbox_east', 'bbox_north')
+            ensure_area_and_bbox_geometries(cursor, 'nger_unified',
+                                                'bbox_west', 'bbox_south', 'bbox_east', 'bbox_north')
         except Exception as e:
             print(f"  ⚠更新NGER几何列失败: {e}")
 
@@ -586,12 +588,17 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
         clean_table = clean_name(f"cer_{table_type}")
         
         # 原始列和地理编码列
-        geocode_fields = {'lat': 'NUMERIC', 'lon': 'NUMERIC', 'formatted_address': 'TEXT', 'place_id': 'TEXT',
-                         'osm_type': 'TEXT', 'osm_id': 'TEXT', 'confidence': 'NUMERIC', 'match_type': 'TEXT',
-                         'locality': 'TEXT', 'postcode': 'TEXT', 'state_full': 'TEXT', 'country': 'TEXT',
-                         'geocode_query': 'TEXT', 'geocode_provider': 'TEXT',
-                         'bbox_south': 'NUMERIC', 'bbox_north': 'NUMERIC', 'bbox_west': 'NUMERIC', 'bbox_east': 'NUMERIC',
-                         'polygon_geojson': 'TEXT'}
+        geocode_fields = {
+            'lat': 'NUMERIC',
+            'lon': 'NUMERIC',
+            'formatted_address': 'TEXT',
+            'place_id': 'TEXT',
+            'postcode': 'TEXT',
+            'bbox_south': 'NUMERIC',
+            'bbox_north': 'NUMERIC',
+            'bbox_west': 'NUMERIC',
+            'bbox_east': 'NUMERIC'
+        }
         geocode_column_names = set(geocode_fields.keys())
         original_cols = [col for col in df.columns if col not in geocode_column_names]
         
@@ -667,7 +674,7 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
         # 为CER表创建/更新geom列
         try:
             ensure_geometry_column_and_index(cursor, clean_table, 'lat', 'lon', 'geom')
-            ensure_area_and_bbox_geometries(cursor, clean_table, 'polygon_geojson',
+            ensure_area_and_bbox_geometries(cursor, clean_table,
                                             'bbox_west', 'bbox_south', 'bbox_east', 'bbox_north')
         except Exception as e:
             print(f"  ⚠更新CER几何列失败: {e}")
@@ -791,53 +798,28 @@ def ensure_geometry_column_and_index(cursor, table_name: str, lat_col: str = 'la
     cursor.execute(update_sql)
     # 3) 创建GiST索引（若不存在）
     index_name = f"{table_name}_{geom_col}_gist"
-    cursor.execute(
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_class c
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE c.relkind = 'i'
-                  AND c.relname = %s
-            ) THEN
-                EXECUTE format('CREATE INDEX %I ON %I USING GIST (%I);', %s, %s, %s);
-            END IF;
-        END$$;
-        """,
-        (index_name, index_name, table_name, geom_col)
-    )
+    try:
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} USING GIST ({geom_col});")
+    except Exception as e:
+        # 兼容老版本 Postgres 无 IF NOT EXISTS 的情况：忽略已存在错误
+        try:
+            cursor.execute(f"SELECT 1 FROM pg_class WHERE relname = %s;", (index_name,))
+            exists = bool(cursor.fetchone())
+            if not exists:
+                cursor.execute(f"CREATE INDEX {index_name} ON {table_name} USING GIST ({geom_col});")
+        except Exception:
+            pass
     print(f"  ✓geometry索引已确保: {index_name}")
 
 def ensure_area_and_bbox_geometries(cursor, table_name: str,
-                                    polygon_geojson_col: str = 'polygon_geojson',
                                     bbox_w_col: str = 'bbox_west', bbox_s_col: str = 'bbox_south',
                                     bbox_e_col: str = 'bbox_east', bbox_n_col: str = 'bbox_north',
-                                    area_geom_col: str = 'geom_area', bbox_geom_col: str = 'geom_bbox') -> None:
-    """确保区域多边形与bbox多边形几何列存在并填充，同时创建GiST索引。"""
-    # 区域多边形列
-    if not geometry_column_exists(cursor, table_name, area_geom_col):
-        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {area_geom_col} geometry(MultiPolygon, 4326);")
-        print(f"  ✓添加geometry列: {table_name}.{area_geom_col}")
+                                    bbox_geom_col: str = 'geom_bbox') -> None:
+    """确保bbox多边形几何列存在并填充，同时创建GiST索引。"""
     # bbox多边形列
     if not geometry_column_exists(cursor, table_name, bbox_geom_col):
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {bbox_geom_col} geometry(Polygon, 4326);")
         print(f"  ✓添加geometry列: {table_name}.{bbox_geom_col}")
-
-    # 用GeoJSON填充区域多边形（仅空值）
-    cursor.execute(f"""
-        UPDATE {table_name}
-        SET {area_geom_col} =
-            CASE
-                WHEN {polygon_geojson_col} IS NOT NULL AND {polygon_geojson_col} <> '' THEN
-                    CASE
-                        WHEN jsonb_typeof({polygon_geojson_col}::jsonb) = 'object' THEN ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON({polygon_geojson_col}), 4326))
-                        ELSE NULL
-                    END
-                ELSE {area_geom_col}
-            END
-        WHERE {area_geom_col} IS NULL;
-    """)
 
     # 用bbox填充bbox多边形（仅空值）
     cursor.execute(f"""
@@ -853,22 +835,15 @@ def ensure_area_and_bbox_geometries(cursor, table_name: str,
     """)
 
     # 索引
-    for col in (area_geom_col, bbox_geom_col):
-        index_name = f"{table_name}_{col}_gist"
-        cursor.execute(
-            """
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM pg_class c
-                    JOIN pg_namespace n ON n.oid = c.relnamespace
-                    WHERE c.relkind = 'i'
-                      AND c.relname = %s
-                ) THEN
-                    EXECUTE format('CREATE INDEX %I ON %I USING GIST (%I);', %s, %s, %s);
-                END IF;
-            END$$;
-            """,
-            (index_name, index_name, table_name, col)
-        )
-        print(f"  ✓geometry索引已确保: {index_name}")
+    index_name = f"{table_name}_{bbox_geom_col}_gist"
+    try:
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} USING GIST ({bbox_geom_col});")
+    except Exception as e:
+        try:
+            cursor.execute(f"SELECT 1 FROM pg_class WHERE relname = %s;", (index_name,))
+            exists = bool(cursor.fetchone())
+            if not exists:
+                cursor.execute(f"CREATE INDEX {index_name} ON {table_name} USING GIST ({bbox_geom_col});")
+        except Exception:
+            pass
+    print(f"  ✓geometry索引已确保: {index_name}")
