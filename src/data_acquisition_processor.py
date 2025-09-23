@@ -26,7 +26,7 @@ from database_config import (
     create_abs_table, insert_abs_data, close_connection_pool, get_connection_pool,
     create_nger_table, create_cer_tables, create_all_abs_tables, DB_CONFIG
 )
-from geocoding import add_geocoding_to_cer_data, save_global_cache
+from geocoding import add_geocoding_to_cer_data, add_geocoding_to_nger_data, save_global_cache
 from excel_utils import get_merged_cells, read_merged_headers
 
 # 配置
@@ -35,28 +35,11 @@ DATA_DIR.mkdir(exist_ok=True)
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "COMP5339-Assignment1/1.0"})
 
-# 通用辅助函数
-def _with_db_connection(operation_func, *args, **kwargs):
-    """使用数据库连接的上下文管理器"""
-    conn = None
-    try:
-        conn = get_db_connection()
-        if not conn:
-            print("✗数据库连接失败")
-            return False
-        return operation_func(conn, *args, **kwargs)
-    except Exception as e:
-        print(f"✗数据库操作失败: {e}")
-        return False
-    finally:
-        if conn:
-            return_db_connection(conn)
-
-def _print_section(title: str, symbol: str = "="):
+def print_section(title: str, symbol: str = "="):
     """打印分节标题"""
     print(f"\n{symbol * 20} {title} {symbol * 20}")
 
-def _print_result(operation: str, success: bool, details: str = ""):
+def print_result(operation: str, success: bool, details: str = ""):
     """打印操作结果"""
     symbol = "✓" if success else "✗"
     print(f"{symbol}{operation}{f': {details}' if details else ''}")
@@ -81,6 +64,13 @@ def download_nger_year(year_data, results_queue):
             df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
             
             # 在线程中直接处理数据库操作
+            try:
+                # 在入库前先对NGER数据做地理编码增强
+                if df is not None and not df.empty:
+                    df = add_geocoding_to_nger_data(df, max_workers=5)
+            except Exception as e:
+                print(f"  ⚠NGER地理编码增强失败，继续入库原始数据: {e}")
+
             conn = get_db_connection()
             if conn and df is not None and not df.empty:
                 if save_nger_data(conn, year_label, df):
@@ -99,7 +89,7 @@ def download_nger_year(year_data, results_queue):
         if 'conn' in locals() and conn:
             return_db_connection(conn)
 
-def _process_threading_results(results_queue, total_tasks, operation_name):
+def process_threading_results(results_queue, total_tasks, operation_name):
     """处理多线程结果"""
     success_count = 0
     while not results_queue.empty():
@@ -113,7 +103,7 @@ def _process_threading_results(results_queue, total_tasks, operation_name):
     print(f"✓{operation_name}处理完成: {success_count}/{total_tasks} 个任务成功")
     return success_count > 0
 
-def fetch_nger_data(conn=None, max_workers=4):
+def fetch_nger_data(conn=None, max_workers=1):
     """多线程获取NGER数据"""
     try:
         table = pd.read_csv(DATA_DIR / "nger_data_api_links.csv")
@@ -135,7 +125,7 @@ def fetch_nger_data(conn=None, max_workers=4):
             futures = [executor.submit(download_nger_year, task, results_queue) for task in tasks]
             [f.result() for f in as_completed(futures)]
         
-        return _process_threading_results(results_queue, len(tasks), "NGER数据")
+        return process_threading_results(results_queue, len(tasks), "NGER数据")
         
     except Exception as e:
         print(f"✗NGER数据处理失败: {e}")
@@ -152,10 +142,10 @@ def fetch_abs_data():
         with open(filepath, 'wb') as f:
             for chunk in response.iter_content(8192):
                 if chunk: f.write(chunk)
-        _print_result("ABS数据下载", True)
+        print_result("ABS数据下载", True)
         return filepath
     except Exception as e:
-        _print_result("ABS数据下载", False, str(e))
+        print_result("ABS数据下载", False, str(e))
         return None
 
 # ============================================================================
@@ -370,7 +360,7 @@ def process_abs_merged_cell_with_db(args):
         if 'conn' in locals() and conn:
             return_db_connection(conn)
 
-def _run_threading_tasks(tasks, task_func, max_workers, operation_name):
+def run_threading_tasks(tasks, task_func, max_workers, operation_name):
     """运行多线程任务的通用函数"""
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -407,7 +397,7 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
             tasks = [(cell, df, level_info, DB_CONFIG) for cell in merged_cells]
             print(f"使用{max_workers}个线程并行处理ABS数据...")
             
-            results = _run_threading_tasks(tasks, process_abs_merged_cell_with_db, max_workers, f"ABS表格{sheet_name}")
+            results = run_threading_tasks(tasks, process_abs_merged_cell_with_db, max_workers, f"ABS表格{sheet_name}")
             
             # 线程统计
             thread_stats = {}
@@ -435,7 +425,7 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
 # 主函数
 # ============================================================================
 
-def _create_table_with_retry(table_name: str, create_func, *args):
+def create_table_with_retry(table_name: str, create_func, *args):
     """创建表的重试逻辑"""
     conn = None
     try:
@@ -455,7 +445,7 @@ def _create_table_with_retry(table_name: str, create_func, *args):
         if conn:
             return_db_connection(conn)
 
-def _print_final_results(results):
+def print_final_results(results):
     """打印最终结果"""
     success = sum(results)
     print(f"\n{'='*50}")
@@ -483,40 +473,40 @@ def main():
         print("先创建数据表，再获取、处理数据...")
         
         # 创建NGER表
-        _print_section("1. 创建NGER表")
-        nger_table_ok = _create_table_with_retry("NGER表", create_nger_table)
-        if not _print_result("NGER表准备", nger_table_ok):
+        print_section("1. 创建NGER表")
+        nger_table_ok = create_table_with_retry("NGER表", create_nger_table)
+        if not print_result("NGER表准备", nger_table_ok):
             return
         
         # NGER数据获取和处理
-        _print_section("2. NGER数据获取和处理")
-        nger_ok = fetch_nger_data(max_workers=10)
+        print_section("2. NGER数据获取和处理")
+        nger_ok = fetch_nger_data()
         
         # 创建CER表
-        _print_section("3. 创建CER表")
-        cer_table_ok = _create_table_with_retry("CER表", create_cer_tables)
-        if not _print_result("CER表准备", cer_table_ok):
+        print_section("3. 创建CER表")
+        cer_table_ok = create_table_with_retry("CER表", create_cer_tables)
+        if not print_result("CER表准备", cer_table_ok):
             return
         
         # CER电站数据获取和处理
-        _print_section("4. CER电站数据获取和处理")
+        print_section("4. CER电站数据获取和处理")
         cer_ok = fetch_cer_data()
     
         # ABS数据处理
         abs_file = fetch_abs_data()
         if abs_file:
-            _print_section("5. 创建ABS表")
-            abs_table_ok = _create_table_with_retry("ABS表", create_all_abs_tables, str(abs_file))
-            if not _print_result("ABS表准备", abs_table_ok):
+            print_section("5. 创建ABS表")
+            abs_table_ok = create_table_with_retry("ABS表", create_all_abs_tables, str(abs_file))
+            if not print_result("ABS表准备", abs_table_ok):
                 return
             
-            _print_section("6. ABS经济数据获取和处理")
+            print_section("6. ABS经济数据获取和处理")
             abs_ok = process_abs_data(str(abs_file), max_workers=10)
         else:
             abs_ok = False
         
         # 打印最终结果
-        _print_final_results([nger_ok, abs_ok, cer_ok])
+        print_final_results([nger_ok, abs_ok, cer_ok])
         
         # 保存地理编码缓存
         print("正在保存地理编码缓存...")

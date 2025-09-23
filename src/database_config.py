@@ -46,13 +46,25 @@ def get_connection_pool(minconn=1, maxconn=10):
                         **DB_CONFIG
                     )
                     print(f"✓PostgreSQL连接池创建成功: {minconn}-{maxconn}个连接")
+                    # 尝试启用PostGIS扩展（若已启用将被忽略）
+                    try:
+                        _conn = _connection_pool.getconn()
+                        if _conn:
+                            with _conn.cursor() as _cur:
+                                _cur.execute("CREATE EXTENSION IF NOT EXISTS postgis;")
+                                _conn.commit()
+                                print("✓PostGIS扩展已启用或已存在")
+                        if _conn:
+                            _connection_pool.putconn(_conn)
+                    except Exception as ee:
+                        print(f"⚠启用PostGIS扩展失败: {ee}")
                 except Exception as e:
                     print(f"✗PostgreSQL连接池创建失败: {e}")
                     return None
     
     return _connection_pool
 
-def _test_connection(conn):
+def test_connection(conn):
     """测试连接是否有效"""
     try:
         with conn.cursor() as cursor:
@@ -61,7 +73,7 @@ def _test_connection(conn):
     except:
         return False
 
-def _track_connection(conn):
+def track_connection(conn):
     """跟踪连接"""
     with _connections_lock:
         _active_connections.add(id(conn))
@@ -78,8 +90,8 @@ def get_db_connection():
             return None
             
         # 测试连接是否有效
-        if _test_connection(conn):
-            _track_connection(conn)
+        if test_connection(conn):
+            track_connection(conn)
             return conn
         
         # 连接无效，尝试重新获取
@@ -90,8 +102,8 @@ def get_db_connection():
             pass
             
         conn = pool.getconn()
-        if conn and _test_connection(conn):
-            _track_connection(conn)
+        if conn and test_connection(conn):
+            track_connection(conn)
             return conn
             
         return None
@@ -109,36 +121,36 @@ def return_db_connection(conn):
     with _connections_lock:
         if conn_id not in _active_connections:
             print("✗尝试归还未跟踪的连接，直接关闭")
-            _safe_close_connection(conn)
+            safe_close_connection(conn)
             return
         _active_connections.discard(conn_id)
     
     if not _connection_pool:
         print("✗连接池不存在，无法归还连接")
-        _safe_close_connection(conn)
+        safe_close_connection(conn)
         return
     
     try:
         # 检查连接是否仍然有效
-        if not _test_connection(conn):
+        if not test_connection(conn):
             print("✗连接已失效，直接关闭")
-            _safe_close_connection(conn)
+            safe_close_connection(conn)
             return
         
         # 归还连接到池
         _connection_pool.putconn(conn)
     except Exception as e:
         print(f"✗归还连接到连接池失败: {e}")
-        _safe_close_connection(conn)
+        safe_close_connection(conn)
 
-def _safe_close_connection(conn):
+def safe_close_connection(conn):
     """安全关闭连接"""
     try:
         conn.close()
     except:
         pass
 
-def _handle_db_operation(operation_name: str, conn, operation_func, *args, **kwargs):
+def handle_db_operation(operation_name: str, conn, operation_func, *args, **kwargs):
     """统一处理数据库操作的错误处理"""
     try:
         result = operation_func(*args, **kwargs)
@@ -170,7 +182,7 @@ def get_table_lock(table_name: str):
             _table_locks[table_name] = threading.Lock()
         return _table_locks[table_name]
 
-def _table_exists(cursor, table_name: str) -> bool:
+def table_exists(cursor, table_name: str) -> bool:
     """检查表是否存在"""
     cursor.execute("""
         SELECT EXISTS (
@@ -181,10 +193,10 @@ def _table_exists(cursor, table_name: str) -> bool:
     """, (table_name,))
     return cursor.fetchone()[0]
 
-def _create_table_safe(cursor, table_name: str, create_sql: str) -> bool:
+def create_table_safe(cursor, table_name: str, create_sql: str) -> bool:
     """安全创建表"""
     try:
-        if not _table_exists(cursor, table_name):
+        if not table_exists(cursor, table_name):
             cursor.execute(create_sql)
             print(f"✓表创建成功: {table_name}")
             return True
@@ -195,7 +207,7 @@ def _create_table_safe(cursor, table_name: str, create_sql: str) -> bool:
         print(f"✗表创建失败: {table_name} - {e}")
         return False
 
-def _create_nger_table_impl(cursor):
+def create_nger_table_impl(cursor):
     """创建NGER表的实现"""
     create_sql = """
     CREATE TABLE nger_unified (
@@ -215,17 +227,39 @@ def _create_nger_table_impl(cursor):
         total_emissions_tco2e NUMERIC,
         grid_info TEXT,
         grid_connected BOOLEAN,
-        important_notes TEXT
+        important_notes TEXT,
+        lat NUMERIC,
+        lon NUMERIC,
+        formatted_address TEXT,
+        place_id TEXT,
+        osm_type TEXT,
+        osm_id TEXT,
+        confidence NUMERIC,
+        match_type TEXT,
+        locality TEXT,
+        postcode TEXT,
+        state_full TEXT,
+        country TEXT,
+        geocode_query TEXT,
+        geocode_provider TEXT
     );
     """
-    return _create_table_safe(cursor, 'nger_unified', create_sql)
+    ok = create_table_safe(cursor, 'nger_unified', create_sql)
+    if not ok:
+        return False
+    # 确保geometry列
+    try:
+        ensure_geometry_column_and_index(cursor, 'nger_unified', 'lat', 'lon', 'geom')
+    except Exception as e:
+        print(f"⚠NGER几何列处理失败: {e}")
+    return True
 
 def create_nger_table(conn) -> bool:
     """创建NGER表（在单线程中调用）"""
     cursor = conn.cursor()
-    return _handle_db_operation("NGER表创建", conn, _create_nger_table_impl, cursor)
+    return handle_db_operation("NGER表创建", conn, create_nger_table_impl, cursor)
 
-def _create_cer_tables_impl(cursor):
+def create_cer_tables_impl(cursor):
     """创建CER表的实现"""
     cer_table_types = ['approved_power_stations', 'committed_power_stations', 'probable_power_stations']
     
@@ -233,7 +267,7 @@ def _create_cer_tables_impl(cursor):
         clean_table = clean_name(f"cer_{table_type}")
         create_sql = f"CREATE TABLE {clean_table} (id SERIAL PRIMARY KEY);"
         
-        if not _create_table_safe(cursor, clean_table, create_sql):
+        if not create_table_safe(cursor, clean_table, create_sql):
             return False
     
     return True
@@ -241,7 +275,7 @@ def _create_cer_tables_impl(cursor):
 def create_cer_tables(conn) -> bool:
     """创建CER表（在单线程中调用）"""
     cursor = conn.cursor()
-    return _handle_db_operation("CER表创建", conn, _create_cer_tables_impl, cursor)
+    return handle_db_operation("CER表创建", conn, create_cer_tables_impl, cursor)
 
 def create_abs_table_safe(conn, merged_cell_value: str, columns: List[str]) -> str:
     """创建ABS表（在单线程中调用）"""
@@ -265,7 +299,7 @@ def create_abs_table_safe(conn, merged_cell_value: str, columns: List[str]) -> s
         
         create_sql += ");"
         
-        if _create_table_safe(cursor, clean_table, create_sql):
+        if create_table_safe(cursor, clean_table, create_sql):
             conn.commit()
             return clean_table
         else:
@@ -368,12 +402,12 @@ def safe_data_prep(df: pd.DataFrame) -> List[tuple]:
         data.append(tuple(row_data))
     return data
 
-def _batch_insert(cursor, insert_sql: str, data: List[tuple], batch_size: int = 1000) -> None:
+def batch_insert(cursor, insert_sql: str, data: List[tuple], batch_size: int = 1000) -> None:
     """批量插入数据"""
     for i in range(0, len(data), batch_size):
         cursor.executemany(insert_sql, data[i:i + batch_size])
 
-def _prepare_insert_sql(table_name: str, columns: List[str]) -> str:
+def prepare_insert_sql(table_name: str, columns: List[str]) -> str:
     """准备插入SQL语句"""
     placeholders = ', '.join(['%s'] * len(columns))
     return f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
@@ -400,15 +434,15 @@ def create_insert_table(conn, table_name: str, df: pd.DataFrame, extra_cols: Lis
                 create_sql += f",\n{col} TEXT"
             create_sql += "\n);"
             
-            if not _create_table_safe(cursor, clean_table, create_sql):
+            if not create_table_safe(cursor, clean_table, create_sql):
                 conn.rollback()
                 return False
         
         data = safe_data_prep(df)
         if data:
             all_cols = ([col[0] for col in extra_cols] if extra_cols else []) + cols
-            insert_sql = _prepare_insert_sql(clean_table, all_cols)
-            _batch_insert(cursor, insert_sql, data)
+            insert_sql = prepare_insert_sql(clean_table, all_cols)
+            batch_insert(cursor, insert_sql, data)
         
         conn.commit()
         print(f"✓数据表创建和插入完成: {clean_table} ({len(data)}行)")
@@ -435,6 +469,50 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
             'grid_connected': ['gridconnected', 'gridconnected2'], 'important_notes': ['importantnotes']
         }
         
+        # 确保地理编码列存在（即使表已存在）
+        geocode_fields = {'lat': 'NUMERIC', 'lon': 'NUMERIC', 'formatted_address': 'TEXT', 'place_id': 'TEXT',
+                          'osm_type': 'TEXT', 'osm_id': 'TEXT', 'confidence': 'NUMERIC', 'match_type': 'TEXT',
+                          'locality': 'TEXT', 'postcode': 'TEXT', 'state_full': 'TEXT', 'country': 'TEXT',
+                          'geocode_query': 'TEXT', 'geocode_provider': 'TEXT',
+                          'bbox_south': 'NUMERIC', 'bbox_north': 'NUMERIC', 'bbox_west': 'NUMERIC', 'bbox_east': 'NUMERIC',
+                          'polygon_geojson': 'TEXT'}
+
+        for col_name, col_type in geocode_fields.items():
+            try:
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = %s 
+                        AND column_name = %s
+                    );
+                """, ('nger_unified', col_name))
+                if not cursor.fetchone()[0]:
+                    cursor.execute(f"ALTER TABLE nger_unified ADD COLUMN {col_name} {col_type}")
+                    print(f"  ✓添加NGER列: {col_name} ({col_type})")
+            except Exception as e:
+                print(f"  ⚠添加NGER列失败: {col_name} - {e}")
+
+        # 统一布尔解析函数（针对 grid_connected 字段）
+        def _parse_bool(value):
+            try:
+                if isinstance(value, bool):
+                    return value
+                s = str(value).strip().lower()
+                truthy = {
+                    'true', 'yes', '1', 'y', 't', 'connected', 'on-grid', 'on grid', 'ongrid', 'ON'
+                }
+                falsy = {
+                    'false', 'no', '0', 'n', 'f', 'not connected', 'disconnected', 'off-grid', 'off grid', 'offgrid', 'OFF'
+                }
+                if s in truthy:
+                    return True
+                if s in falsy:
+                    return False
+                return None
+            except Exception:
+                return None
+
         data = []
         for _, row in df.iterrows():
             row_data = [year_label]
@@ -452,7 +530,7 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
                         val = row.get(source_col)
                         if val and not pd.isna(val) and str(val).strip():
                             if target_col == 'grid_connected':
-                                value = str(val).lower() in ['true', 'yes', '1', 'connected']
+                                value = _parse_bool(val)
                             elif target_col.endswith(('_gj', '_mwh', '_tco2e')):
                                 try:
                                     value = float(str(val).replace(',', ''))
@@ -462,17 +540,36 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
                                 value = str(val)
                             break
                 row_data.append(value)
+
+            # 追加地理编码列值
+            for field in geocode_fields.keys():
+                value = row.get(field)
+                if field in ['lat', 'lon', 'confidence'] and value is not None and not pd.isna(value):
+                    try:
+                        row_data.append(float(value))
+                    except:
+                        row_data.append(None)
+                else:
+                    row_data.append(str(value) if value is not None and not pd.isna(value) and str(value).strip() else None)
             data.append(tuple(row_data))
         
         cols = ['year_label', 'facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation',
                 'facility_type', 'electricity_production_gj', 'electricity_production_mwh',
                 'emission_intensity_tco2e_mwh', 'scope1_emissions_tco2e', 'scope2_emissions_tco2e',
-                'total_emissions_tco2e', 'grid_info', 'grid_connected', 'important_notes']
+                'total_emissions_tco2e', 'grid_info', 'grid_connected', 'important_notes'] + list(geocode_fields.keys())
         
         # 批量插入
-        insert_sql = _prepare_insert_sql('nger_unified', cols)
-        _batch_insert(cursor, insert_sql, data)
+        insert_sql = prepare_insert_sql('nger_unified', cols)
+        batch_insert(cursor, insert_sql, data)
         
+        # 插入完成后生成/更新geom列
+        try:
+            ensure_geometry_column_and_index(cursor, 'nger_unified', 'lat', 'lon', 'geom')
+            ensure_area_and_bbox_geometries(cursor, 'nger_unified', 'polygon_geojson',
+                                            'bbox_west', 'bbox_south', 'bbox_east', 'bbox_north')
+        except Exception as e:
+            print(f"  ⚠更新NGER几何列失败: {e}")
+
         conn.commit()
         print(f"  ✓NGER数据入库成功: {len(data)}行 -> nger_unified表")
         return True
@@ -489,11 +586,14 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
         clean_table = clean_name(f"cer_{table_type}")
         
         # 原始列和地理编码列
-        original_cols = [col for col in df.columns if not col.startswith(('lat', 'lon', 'formatted_address', 'place_id', 'osm_', 'confidence', 'match_type', 'locality', 'postcode', 'state_full', 'country', 'geocode_'))]
         geocode_fields = {'lat': 'NUMERIC', 'lon': 'NUMERIC', 'formatted_address': 'TEXT', 'place_id': 'TEXT',
                          'osm_type': 'TEXT', 'osm_id': 'TEXT', 'confidence': 'NUMERIC', 'match_type': 'TEXT',
                          'locality': 'TEXT', 'postcode': 'TEXT', 'state_full': 'TEXT', 'country': 'TEXT',
-                         'geocode_query': 'TEXT', 'geocode_provider': 'TEXT'}
+                         'geocode_query': 'TEXT', 'geocode_provider': 'TEXT',
+                         'bbox_south': 'NUMERIC', 'bbox_north': 'NUMERIC', 'bbox_west': 'NUMERIC', 'bbox_east': 'NUMERIC',
+                         'polygon_geojson': 'TEXT'}
+        geocode_column_names = set(geocode_fields.keys())
+        original_cols = [col for col in df.columns if col not in geocode_column_names]
         
         # 准备列信息用于数据插入
         used_names = {'id'}
@@ -561,9 +661,17 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
             data.append(tuple(row_data))
         
         # 插入
-        insert_sql = _prepare_insert_sql(clean_table, all_columns)
-        _batch_insert(cursor, insert_sql, data)
+        insert_sql = prepare_insert_sql(clean_table, all_columns)
+        batch_insert(cursor, insert_sql, data)
         
+        # 为CER表创建/更新geom列
+        try:
+            ensure_geometry_column_and_index(cursor, clean_table, 'lat', 'lon', 'geom')
+            ensure_area_and_bbox_geometries(cursor, clean_table, 'polygon_geojson',
+                                            'bbox_west', 'bbox_south', 'bbox_east', 'bbox_north')
+        except Exception as e:
+            print(f"  ⚠更新CER几何列失败: {e}")
+
         conn.commit()
         print(f"  ✓CER数据入库成功: {clean_table} ({len(data)}行，含地理编码)")
         return True
@@ -631,8 +739,8 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
             
             data.append(tuple(row_data))
         
-        insert_sql = _prepare_insert_sql(table_name, cols)
-        _batch_insert(cursor, insert_sql, data, 10000)
+        insert_sql = prepare_insert_sql(table_name, cols)
+        batch_insert(cursor, insert_sql, data, 10000)
         
         conn.commit()
         print(f"✓ABS数据插入成功: {len(data)}行")
@@ -642,3 +750,125 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
         print(f"✗ABS数据插入失败: {e}")
         conn.rollback()
         return False
+
+# =============================================================================
+# PostGIS/Geometry 辅助函数
+# =============================================================================
+
+def geometry_column_exists(cursor, table_name: str, geom_col: str = 'geom') -> bool:
+    """检查geometry列是否存在。"""
+    cursor.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+              AND column_name = %s
+        );
+        """,
+        (table_name, geom_col)
+    )
+    return bool(cursor.fetchone()[0])
+
+
+def ensure_geometry_column_and_index(cursor, table_name: str, lat_col: str = 'lat', lon_col: str = 'lon', geom_col: str = 'geom') -> None:
+    """确保存在geometry(Point,4326)列，并由lat/lon填充，创建GiST索引。"""
+    # 1) 添加geometry列
+    if not geometry_column_exists(cursor, table_name, geom_col):
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {geom_col} geometry(Point, 4326);")
+            print(f"  ✓添加geometry列: {table_name}.{geom_col}")
+        except Exception as e:
+            # 若因扩展未启用失败则上层应已尝试启用
+            raise e
+    # 2) 用lat/lon更新geom（仅空值）
+    update_sql = f"""
+        UPDATE {table_name}
+        SET {geom_col} = ST_SetSRID(ST_MakePoint(NULLIF({lon_col}::text,'')::double precision,
+                                                 NULLIF({lat_col}::text,'')::double precision), 4326)
+        WHERE {geom_col} IS NULL AND {lat_col} IS NOT NULL AND {lon_col} IS NOT NULL;
+    """
+    cursor.execute(update_sql)
+    # 3) 创建GiST索引（若不存在）
+    index_name = f"{table_name}_{geom_col}_gist"
+    cursor.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind = 'i'
+                  AND c.relname = %s
+            ) THEN
+                EXECUTE format('CREATE INDEX %I ON %I USING GIST (%I);', %s, %s, %s);
+            END IF;
+        END$$;
+        """,
+        (index_name, index_name, table_name, geom_col)
+    )
+    print(f"  ✓geometry索引已确保: {index_name}")
+
+def ensure_area_and_bbox_geometries(cursor, table_name: str,
+                                    polygon_geojson_col: str = 'polygon_geojson',
+                                    bbox_w_col: str = 'bbox_west', bbox_s_col: str = 'bbox_south',
+                                    bbox_e_col: str = 'bbox_east', bbox_n_col: str = 'bbox_north',
+                                    area_geom_col: str = 'geom_area', bbox_geom_col: str = 'geom_bbox') -> None:
+    """确保区域多边形与bbox多边形几何列存在并填充，同时创建GiST索引。"""
+    # 区域多边形列
+    if not geometry_column_exists(cursor, table_name, area_geom_col):
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {area_geom_col} geometry(MultiPolygon, 4326);")
+        print(f"  ✓添加geometry列: {table_name}.{area_geom_col}")
+    # bbox多边形列
+    if not geometry_column_exists(cursor, table_name, bbox_geom_col):
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {bbox_geom_col} geometry(Polygon, 4326);")
+        print(f"  ✓添加geometry列: {table_name}.{bbox_geom_col}")
+
+    # 用GeoJSON填充区域多边形（仅空值）
+    cursor.execute(f"""
+        UPDATE {table_name}
+        SET {area_geom_col} =
+            CASE
+                WHEN {polygon_geojson_col} IS NOT NULL AND {polygon_geojson_col} <> '' THEN
+                    CASE
+                        WHEN jsonb_typeof({polygon_geojson_col}::jsonb) = 'object' THEN ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON({polygon_geojson_col}), 4326))
+                        ELSE NULL
+                    END
+                ELSE {area_geom_col}
+            END
+        WHERE {area_geom_col} IS NULL;
+    """)
+
+    # 用bbox填充bbox多边形（仅空值）
+    cursor.execute(f"""
+        UPDATE {table_name}
+        SET {bbox_geom_col} =
+            CASE
+                WHEN {bbox_w_col} IS NOT NULL AND {bbox_s_col} IS NOT NULL AND {bbox_e_col} IS NOT NULL AND {bbox_n_col} IS NOT NULL THEN
+                    ST_MakeEnvelope({bbox_w_col}::double precision, {bbox_s_col}::double precision,
+                                    {bbox_e_col}::double precision, {bbox_n_col}::double precision, 4326)
+                ELSE {bbox_geom_col}
+            END
+        WHERE {bbox_geom_col} IS NULL;
+    """)
+
+    # 索引
+    for col in (area_geom_col, bbox_geom_col):
+        index_name = f"{table_name}_{col}_gist"
+        cursor.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE c.relkind = 'i'
+                      AND c.relname = %s
+                ) THEN
+                    EXECUTE format('CREATE INDEX %I ON %I USING GIST (%I);', %s, %s, %s);
+                END IF;
+            END$$;
+            """,
+            (index_name, index_name, table_name, col)
+        )
+        print(f"  ✓geometry索引已确保: {index_name}")

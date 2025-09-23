@@ -1,7 +1,8 @@
 .DS_Store
 
 # 排除data目录下的所有文件
-data/
+data/*.xlsx
+data/*.csv
 
 # 排除Python缓存文件
 __pycache__/
