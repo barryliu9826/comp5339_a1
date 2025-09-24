@@ -3,21 +3,17 @@
 
 # 标准库导入
 import threading
-import time
 from typing import List
 
 # 第三方库导入
 import psycopg2
 import psycopg2.pool
 import pandas as pd
-import numpy as np
 
 # 本地模块导入
 from excel_utils import get_merged_cells, read_merged_headers
+from state_standardizer import standardize_dataframe_states
 
-# 表级别的锁字典，用于更细粒度的锁控制
-_table_locks = {}
-_table_locks_lock = threading.Lock()
 
 DB_CONFIG = {
     'host': 'localhost', 'port': 5432, 'user': 'postgres', 
@@ -150,17 +146,6 @@ def safe_close_connection(conn):
     except:
         pass
 
-def handle_db_operation(operation_name: str, conn, operation_func, *args, **kwargs):
-    """统一处理数据库操作的错误处理"""
-    try:
-        result = operation_func(*args, **kwargs)
-        if result is not False:
-            conn.commit()
-        return result
-    except Exception as e:
-        print(f"✗{operation_name}失败: {e}")
-        conn.rollback()
-        return False
 
 def close_connection_pool():
     """关闭连接池"""
@@ -175,12 +160,6 @@ def close_connection_pool():
         
         print("✓数据库连接池已关闭")
 
-def get_table_lock(table_name: str):
-    """获取表级别的锁"""
-    with _table_locks_lock:
-        if table_name not in _table_locks:
-            _table_locks[table_name] = threading.Lock()
-        return _table_locks[table_name]
 
 def table_exists(cursor, table_name: str) -> bool:
     """检查表是否存在"""
@@ -213,6 +192,8 @@ def create_nger_table_impl(cursor):
     CREATE TABLE nger_unified (
         id SERIAL PRIMARY KEY,
         year_label TEXT,
+        start_year INTEGER,
+        stop_year INTEGER,
         facilityname TEXT,
         state TEXT,
         facility_type TEXT,
@@ -251,8 +232,16 @@ def create_nger_table_impl(cursor):
 
 def create_nger_table(conn) -> bool:
     """创建NGER表（在单线程中调用）"""
-    cursor = conn.cursor()
-    return handle_db_operation("NGER表创建", conn, create_nger_table_impl, cursor)
+    try:
+        cursor = conn.cursor()
+        result = create_nger_table_impl(cursor)
+        if result is not False:
+            conn.commit()
+        return result
+    except Exception as e:
+        print(f"✗NGER表创建失败: {e}")
+        conn.rollback()
+        return False
 
 def create_cer_tables_impl(cursor):
     """创建CER表的实现"""
@@ -269,42 +258,17 @@ def create_cer_tables_impl(cursor):
 
 def create_cer_tables(conn) -> bool:
     """创建CER表（在单线程中调用）"""
-    cursor = conn.cursor()
-    return handle_db_operation("CER表创建", conn, create_cer_tables_impl, cursor)
-
-def create_abs_table_safe(conn, merged_cell_value: str, columns: List[str]) -> str:
-    """创建ABS表（在单线程中调用）"""
     try:
         cursor = conn.cursor()
-        clean_table = clean_name(merged_cell_value)
-        
-        # 构建创建表的SQL
-        create_sql = f"CREATE TABLE {clean_table} (id SERIAL PRIMARY KEY, code TEXT, label TEXT, year INTEGER, geographic_level INTEGER"
-        
-        used = {'id', 'code', 'label', 'year', 'geographic_level'}
-        for col in columns[3:]:
-            clean_col = clean_name(col)
-            original = clean_col
-            counter = 1
-            while clean_col in used:
-                clean_col = f"{original}_{counter}"
-                counter += 1
-            used.add(clean_col)
-            create_sql += f", {clean_col} TEXT"
-        
-        create_sql += ");"
-        
-        if create_table_safe(cursor, clean_table, create_sql):
+        result = create_cer_tables_impl(cursor)
+        if result is not False:
             conn.commit()
-            return clean_table
-        else:
-            conn.rollback()
-            return None
-            
+        return result
     except Exception as e:
-        print(f"✗ABS表创建失败: {merged_cell_value} - {e}")
+        print(f"✗CER表创建失败: {e}")
         conn.rollback()
-        return None
+        return False
+
 
 def create_all_abs_tables(conn, file_path: str) -> bool:
     """预创建所有ABS表（在单线程中调用）"""
@@ -331,9 +295,30 @@ def create_all_abs_tables(conn, file_path: str) -> bool:
                     selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col:end_col])
                     
                     # 创建表
-                    table_name = create_abs_table_safe(conn, cell['value'], selected_cols)
-                    if not table_name:
-                        print(f"✗ABS表创建失败: {cell['value']}")
+                    try:
+                        clean_table = clean_name(cell['value'])
+                        
+                        # 构建创建表的SQL
+                        create_sql = f"CREATE TABLE {clean_table} (id SERIAL PRIMARY KEY, code TEXT, label TEXT, year INTEGER, geographic_level INTEGER, standardized_state TEXT"
+                        
+                        used = {'id', 'code', 'label', 'year', 'geographic_level', 'standardized_state'}
+                        for col in selected_cols[3:]:
+                            clean_col = clean_name(col)
+                            original = clean_col
+                            counter = 1
+                            while clean_col in used:
+                                clean_col = f"{original}_{counter}"
+                                counter += 1
+                            used.add(clean_col)
+                            create_sql += f", {clean_col} TEXT"
+                        
+                        create_sql += ");"
+                        
+                        if not create_table_safe(cursor, clean_table, create_sql):
+                            print(f"✗ABS表创建失败: {cell['value']}")
+                            return False
+                    except Exception as e:
+                        print(f"✗ABS表创建失败: {cell['value']} - {e}")
                         return False
                 
                 print(f"✓ABS表预创建完成: {sheet_name} - {len(merged_cells)}个表")
@@ -342,6 +327,8 @@ def create_all_abs_tables(conn, file_path: str) -> bool:
                 print(f"✗ABS表预创建失败: {sheet_name} - {e}")
                 return False
         
+        # 成功创建后提交事务，确保表实际存在
+        conn.commit()
         return True
         
     except Exception as e:
@@ -369,33 +356,7 @@ def clean_name(name: str, idx: int = 0) -> str:
         clean = f"col_{clean}"
     return clean[:50]
 
-def make_unique(names: List[str]) -> List[str]:
-    """确保唯一性"""
-    seen, unique = set(), []
-    for name in names:
-        original, counter = name, 1
-        while name in seen:
-            name = f"{original}_{counter}"
-            counter += 1
-        seen.add(name)
-        unique.append(name)
-    return unique
 
-def safe_data_prep(df: pd.DataFrame) -> List[tuple]:
-    """安全数据准备"""
-    data = []
-    for _, row in df.reset_index(drop=True).iterrows():
-        row_data = []
-        for i in range(len(df.columns)):
-            value = row.iat[i]
-            if pd.isna(value) or value is None:
-                row_data.append(None)
-            elif isinstance(value, (pd.Series, np.ndarray, list, dict, tuple)):
-                row_data.append(str(value))
-            else:
-                row_data.append(str(value))
-        data.append(tuple(row_data))
-    return data
 
 def batch_insert(cursor, insert_sql: str, data: List[tuple], batch_size: int = 1000) -> None:
     """批量插入数据"""
@@ -407,52 +368,16 @@ def prepare_insert_sql(table_name: str, columns: List[str]) -> str:
     placeholders = ', '.join(['%s'] * len(columns))
     return f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
 
-def create_insert_table(conn, table_name: str, df: pd.DataFrame, extra_cols: List[tuple] = None) -> bool:
-    """建表并插入数据"""
-    try:
-        cursor = conn.cursor()
-        clean_table = clean_name(table_name)
-        
-        # 建表SQL
-        cols = [clean_name(col, i) for i, col in enumerate(df.columns)]
-        cols = make_unique(cols)
-        
-        # 使用表级别锁来避免多线程竞争条件
-        table_lock = get_table_lock(clean_table)
-        with table_lock:
-            # 构建创建表的SQL
-            create_sql = f"CREATE TABLE {clean_table} (\nid SERIAL PRIMARY KEY"
-            if extra_cols:
-                for col_name, col_type in extra_cols:
-                    create_sql += f",\n{col_name} {col_type}"
-            for col in cols:
-                create_sql += f",\n{col} TEXT"
-            create_sql += "\n);"
-            
-            if not create_table_safe(cursor, clean_table, create_sql):
-                conn.rollback()
-                return False
-        
-        data = safe_data_prep(df)
-        if data:
-            all_cols = ([col[0] for col in extra_cols] if extra_cols else []) + cols
-            insert_sql = prepare_insert_sql(clean_table, all_cols)
-            batch_insert(cursor, insert_sql, data)
-        
-        conn.commit()
-        print(f"✓数据表创建和插入完成: {clean_table} ({len(data)}行)")
-        return True
-        
-    except Exception as e:
-        print(f"✗数据表处理失败: {table_name} - {e}")
-        conn.rollback()
-        return False
 
 # 专用函数
 def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
     """保存NGER数据"""
     try:
         cursor = conn.cursor()
+        
+        # 标准化州名
+        print(f"  📍标准化NGER州名...")
+        standardize_dataframe_states(df, 'state')
         
         mappings = {
             'facility_type': ['type'], 'electricity_production_gj': ['electricityproductiongj'],
@@ -517,10 +442,17 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
         for _, row in df.iterrows():
             row_data = [year_label]
             
+            # 添加时间列
+            start_year = row.get('start_year') if 'start_year' in df.columns else None
+            stop_year = row.get('stop_year') if 'stop_year' in df.columns else None
+            row_data.append(start_year)
+            row_data.append(stop_year)
+            
             # 基础列
             for col in ['facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation']:
                 value = row.get(col) if col in df.columns else None
-                row_data.append(str(value) if value and not pd.isna(value) else None)
+                has_value = (value is not None) and (not pd.isna(value)) and (str(value).strip() != '') and (str(value).strip().lower() not in {'nan', 'none', '-'})
+                row_data.append(str(value).strip() if has_value else None)
             
             # 映射列
             for target_col, source_cols in mappings.items():
@@ -555,7 +487,7 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
                     row_data.append(str(value) if value is not None and not pd.isna(value) and str(value).strip() else None)
             data.append(tuple(row_data))
         
-        cols = ['year_label', 'facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation',
+        cols = ['year_label', 'start_year', 'stop_year', 'facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation',
                 'facility_type', 'electricity_production_gj', 'electricity_production_mwh',
                 'emission_intensity_tco2e_mwh', 'scope1_emissions_tco2e', 'scope2_emissions_tco2e',
                 'total_emissions_tco2e', 'grid_info', 'grid_connected', 'important_notes'] + list(geocode_fields.keys())
@@ -586,6 +518,10 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
     try:
         cursor = conn.cursor()
         clean_table = clean_name(f"cer_{table_type}")
+        
+        # 标准化州名
+        print(f"  📍标准化CER州名...")
+        standardize_dataframe_states(df, 'state')
         
         # 原始列和地理编码列
         geocode_fields = {
@@ -653,17 +589,22 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
         data = []
         
         for _, row in df.iterrows():
-            row_data = [str(row.get(col)) if row.get(col) and not pd.isna(row.get(col)) else None for col in original_cols]
+            row_data = []
+            for col in original_cols:
+                val = row.get(col)
+                has_value = (val is not None) and (not pd.isna(val)) and (str(val).strip() != '') and (str(val).strip().lower() not in {'nan', 'none', '-'})
+                row_data.append(str(val).strip() if has_value else None)
             
             for field in geocode_fields.keys():
                 value = row.get(field)
-                if field in ['lat', 'lon', 'confidence'] and value is not None:
+                if field in ['lat', 'lon', 'confidence'] and value is not None and not pd.isna(value):
                     try:
                         row_data.append(float(value))
                     except:
                         row_data.append(None)
                 else:
-                    row_data.append(str(value) if value and not pd.isna(value) else None)
+                    has_value = (value is not None) and (not pd.isna(value)) and (str(value).strip() != '') and (str(value).strip().lower() not in {'nan', 'none', '-'})
+                    row_data.append(str(value).strip() if has_value else None)
             
             data.append(tuple(row_data))
         
@@ -699,9 +640,26 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
     try:
         cursor = conn.cursor()
         
+        # 标准化ABS数据中的州名（在Label列中）
+        print(f"  📍标准化ABS州名...")
+        if 'Label' in df.columns:
+            # 对于ABS数据，我们需要将Label列中的州名标准化
+            # 但保留原始Label，添加一个新的standardized_state列
+            from state_standardizer import standardize_state_name
+            df['standardized_state'] = df['Label'].apply(standardize_state_name)
+        
         cols = ['code', 'label', 'year', 'geographic_level']
         used = set(cols)
+        
+        # 添加standardized_state列（如果存在）
+        if 'standardized_state' in df.columns:
+            cols.append('standardized_state')
+            used.add('standardized_state')
+        
         for col in df.columns[3:]:
+            # Skip standardized_state as it's handled separately above
+            if col == 'standardized_state':
+                continue
             clean_col = clean_name(col)
             original = clean_col
             counter = 1
@@ -720,8 +678,9 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
                 if pd.isna(value):
                     row_data.append(None)
                 else:
-                    str_val = str(value)
-                    if str_val == '-':
+                    str_val = str(value).strip()
+                    lower_val = str_val.lower()
+                    if str_val == '-' or str_val == '' or lower_val in {'nan', 'none', 'null'}:
                         row_data.append(None)
                     elif i == 0 and len(str_val) > 50:
                         row_data.append(str_val[:50])
@@ -736,13 +695,25 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
             # 添加geographic_level
             row_data.append(geo_level if geo_level is not None else -1)
             
+            # 添加standardized_state列（如果存在）
+            if 'standardized_state' in df.columns:
+                row_data.append(row.get('standardized_state'))
+            
             # 其他列
             for col in df.columns[3:]:
+                # Skip standardized_state as it's handled separately above
+                if col == 'standardized_state':
+                    continue
                 value = row[col]
-                if pd.isna(value) or str(value) == '-':
+                if pd.isna(value):
                     row_data.append(None)
                 else:
-                    row_data.append(str(value))
+                    str_val = str(value).strip()
+                    lower_val = str_val.lower()
+                    if str_val == '-' or str_val == '' or lower_val in {'nan', 'none', 'null'}:
+                        row_data.append(None)
+                    else:
+                        row_data.append(str_val)
             
             data.append(tuple(row_data))
         

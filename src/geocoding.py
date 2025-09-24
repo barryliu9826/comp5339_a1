@@ -11,7 +11,7 @@ import json
 import hashlib
 from pathlib import Path
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 直接在此处填写你的 Google Maps API Key（仅用于本地/作业环境）。
 # 注意：不要把真实密钥提交到公共仓库或共享。
@@ -145,48 +145,8 @@ class GeocodingCache:
         """缓存失败结果（避免重复查询）"""
         self._set_cache_entry(query, None)
     
-    def get_stats(self) -> Dict[str, Any]:
-        """获取缓存统计信息"""
-        with self.lock:
-            total = len(self.cache)
-            successful = sum(1 for v in self.cache.values() if v.get('result') is not None)
-            failed = total - successful
-            
-            return {
-                'total_queries': total,
-                'successful_queries': successful,
-                'failed_queries': failed,
-                'success_rate': (successful / total * 100) if total > 0 else 0,
-                'cache_file': str(self.cache_file),
-                'cache_size_mb': self.cache_file.stat().st_size / (1024 * 1024) if self.cache_file.exists() else 0
-            }
     
-    def clear_cache(self):
-        """清空缓存"""
-        with self.lock:
-            self.cache.clear()
-            if self.cache_file.exists():
-                self.cache_file.unlink()
-            print("✓地理编码缓存已清空")
     
-    def cleanup_old_entries(self, max_age_days: int = 30):
-        """清理过期缓存条目"""
-        with self.lock:
-            current_time = time.time()
-            max_age_seconds = max_age_days * 24 * 60 * 60
-            
-            old_keys = []
-            for key, value in self.cache.items():
-                cached_at = value.get('cached_at', 0)
-                if current_time - cached_at > max_age_seconds:
-                    old_keys.append(key)
-            
-            for key in old_keys:
-                del self.cache[key]
-            
-            if old_keys:
-                print(f"✓清理了 {len(old_keys)} 个过期缓存条目")
-                self.save_cache()
 
 # 全局缓存实例
 _global_cache = None
@@ -211,11 +171,6 @@ def save_global_cache():
     if _global_cache:
         _global_cache.save_cache()
 
-def clear_global_cache():
-    """清空全局缓存"""
-    global _global_cache
-    if _global_cache:
-        _global_cache.clear_cache()
 
 def initialize_geocoding_cache(cache_file: str = None):
     """初始化地理编码缓存（在程序启动时调用）"""
@@ -329,7 +284,7 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
                     })
         
         # 线程安全地更新DataFrame
-        print(f"\\n正在更新DataFrame...")
+        print(f"\n正在更新DataFrame...")
         success_count = update_dataframe_with_results(df, results)
         
         # 保存持久化缓存
@@ -435,9 +390,6 @@ class Geocoder:
         
         print(f"✓ Google Maps Geocoding API已初始化，日配额: {self.quota_manager.daily_limit}")
     
-    def get_quota_stats(self) -> Dict[str, Any]:
-        """获取配额统计信息"""
-        return self.quota_manager.get_stats()
         
     def geocode_query(self, query: str) -> Optional[Dict]:
         """执行地理编码查询（Google Maps API版本）"""

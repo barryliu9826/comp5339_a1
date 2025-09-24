@@ -12,13 +12,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # 第三方库导入
 import requests
 import pandas as pd
-import openpyxl
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import StaleElementReferenceException
 
 # 本地模块导入
 from database_config import (
@@ -28,6 +27,7 @@ from database_config import (
 )
 from geocoding import add_geocoding_to_cer_data, add_geocoding_to_nger_data, save_global_cache, initialize_geocoding_cache
 from excel_utils import get_merged_cells, read_merged_headers
+from time_format_utils import process_nger_time_format, process_cer_time_format, process_abs_time_format
 
 # 配置
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -70,11 +70,15 @@ def download_nger_year(year_data, results_queue):
             
             # 在线程中直接处理数据库操作
             try:
-                # 在入库前先对NGER数据做地理编码增强
+                # 1. 先进行时间格式转换
+                if df is not None and not df.empty:
+                    df = process_nger_time_format(df, year_label)
+                    
+                # 2. 再进行地理编码增强
                 if df is not None and not df.empty:
                     df = add_geocoding_to_nger_data(df, max_workers=1)
             except Exception as e:
-                print(f"  ⚠NGER地理编码增强失败，继续入库原始数据: {e}")
+                print(f"  ⚠NGER数据处理失败，继续入库原始数据: {e}")
 
             conn = get_db_connection()
             if conn and df is not None and not df.empty:
@@ -308,8 +312,11 @@ def fetch_cer_data(max_workers=1):
                 df_result = scrape_paginated_table(driver, table, table_type)
                 if df_result.empty: continue
                 
+                print(f"  对CER数据进行时间格式转换...")
+                df_time_processed = process_cer_time_format(df_result, table_type)
+                
                 print(f"  对CER数据进行多线程地理编码...")
-                df_geocoded = add_geocoding_to_cer_data(df_result, table_type, max_workers)
+                df_geocoded = add_geocoding_to_cer_data(df_time_processed, table_type, max_workers)
                 
                 if save_cer_data(conn, table_type, df_geocoded):
                     success_count += 1
@@ -382,7 +389,7 @@ def run_threading_tasks(tasks, task_func, max_workers, operation_name):
     print(f"✓{operation_name}处理完成: {success_count}/{len(tasks)} 个任务成功")
     return results
 
-def process_abs_data(file_path: str, conn=None, max_workers=4):
+def process_abs_data(file_path: str, max_workers=4):
     """多线程处理ABS数据"""
     try:
         # 地理级别定义
@@ -398,6 +405,9 @@ def process_abs_data(file_path: str, conn=None, max_workers=4):
             merged_cells = get_merged_cells(file_path, sheet_name)
             df = read_merged_headers(file_path, sheet_name)
             print(f"发现{len(merged_cells)}个合并单元格, 数据{df.shape[0]}行")
+            
+            # 处理ABS时间格式（验证）
+            df = process_abs_time_format(df)
             
             tasks = [(cell, df, level_info, DB_CONFIG) for cell in merged_cells]
             print(f"使用{max_workers}个线程并行处理ABS数据...")

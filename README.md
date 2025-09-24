@@ -35,10 +35,12 @@
 
 ```
 src/
-├── data_acquisition_processor.py  # 主处理程序 (521行)
-├── database_config.py            # 数据库配置和操作 (644行)
-├── geocoding.py                  # 地理编码与缓存 (454行)
-└── excel_utils.py                # Excel处理工具 (55行)
+├── data_acquisition_processor.py  # 主处理程序 (545行)
+├── database_config.py            # 数据库配置和操作 (820行)
+├── geocoding.py                  # 地理编码与缓存 (658行)
+├── excel_utils.py                # Excel处理工具 (55行)
+├── state_standardizer.py         # 州名标准化工具 (227行)
+└── time_format_utils.py          # 时间格式处理工具 (154行)
 
 data/
 ├── nger_data_api_links.csv       # NGER API链接
@@ -240,21 +242,21 @@ WHERE state = 'NSW';
 ## 项目文件说明
 
 ### 核心处理文件
-- **`src/data_acquisition_processor.py`** (521行): 主数据获取和处理程序
+- **`src/data_acquisition_processor.py`** (545行): 主数据获取和处理程序
   - NGER数据下载和JSON处理
   - ABS Excel文件读取和合并单元格解析
   - CER网站数据爬取和分页处理
   - 统一的PostgreSQL数据存储
   - 多线程并发处理优化
 
-- **`src/database_config.py`** (644行): 数据库配置和操作模块
+- **`src/database_config.py`** (820行): 数据库配置和操作模块
   - 数据库连接池管理
   - 表创建和数据插入函数
   - 列名清理和去重逻辑
   - 批量插入优化
   - 线程安全的数据库操作
 
-- **`src/geocoding.py`** (454行): 地理编码与缓存模块
+- **`src/geocoding.py`** (658行): 地理编码与缓存模块
   - Nominatim API集成
   - 内存+文件双层缓存
   - 多线程地理编码处理
@@ -264,6 +266,18 @@ WHERE state = 'NSW';
   - 合并单元格解析
   - 多级表头处理
   - 动态列名生成
+
+- **`src/state_standardizer.py`** (227行): 州名标准化工具模块
+  - 澳大利亚州名标准化映射
+  - 支持英文全名、缩写、数字代码转换
+  - DataFrame批量州名标准化处理
+  - 容错处理和数据清理
+
+- **`src/time_format_utils.py`** (154行): 时间格式处理工具模块
+  - NGER年份标签拆分 (如 "2023-24" → start_year, stop_year)
+  - CER时间格式标准化处理
+  - ABS时间数据格式统一
+  - 多种时间格式的自动识别和转换
 
 ### 数据文件
 - **`data/nger_data_api_links.csv`**: NGER数据API链接
@@ -361,18 +375,20 @@ save_global_cache()
 ## 项目状态
 
 ### 当前版本特性
-- ✅ 完整的四模块架构 (数据获取、数据库、地理编码、Excel处理)
+- ✅ 完整的六模块架构 (数据获取、数据库、地理编码、Excel处理、州名标准化、时间格式处理)
 - ✅ 多线程并发处理优化
 - ✅ 地理编码缓存系统
 - ✅ Excel合并单元格智能解析
 - ✅ 数据库连接池管理
 - ✅ 线程安全的操作设计
+- ✅ 州名标准化和时间格式统一处理
 
-### 最近更新 (2025年1月26日)
-- 📝 更新了 `requirements.txt` 依赖配置
-- 📝 完善了 README.md 文档结构
-- 📝 添加了 `excel_utils.py` 模块说明
-- 📝 更新了文件行数和项目统计信息
+### 最近更新 (2024年9月24日)
+- 🆕 新增 `state_standardizer.py` 模块 (227行): 澳大利亚州名标准化工具
+- 🆕 新增 `time_format_utils.py` 模块 (154行): 时间格式处理工具
+- 📝 扩展为六模块架构，增强数据处理能力
+- 📝 更新了所有模块的文件行数统计
+- 📝 完善了模块功能说明和技术文档
 
 ## 联系信息
 
@@ -382,4 +398,4 @@ save_global_cache()
 
 ---
 
-*最后更新: 2025年1月26日*
+*最后更新: 2024年9月24日*
