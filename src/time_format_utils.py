@@ -55,7 +55,7 @@ def process_nger_time_format(df: pd.DataFrame, year_label: str) -> pd.DataFrame:
     df_processed['start_year'] = start_year
     df_processed['stop_year'] = stop_year
     
-    print(f"  ✓NGER time format processing: {year_label} -> {start_year}, {stop_year}")
+    print(f"  NGER time format processing: {year_label} -> {start_year}, {stop_year}")
     return df_processed
 
 def process_cer_time_format(df: pd.DataFrame, table_type: str) -> pd.DataFrame:
@@ -67,7 +67,7 @@ def process_cer_time_format(df: pd.DataFrame, table_type: str) -> pd.DataFrame:
     Returns:
         DataFrame: Data with added year and month columns
     """
-    print(f"  🕐Processing CER time format: {table_type}")
+    print(f"  Processing CER time format: {table_type}")
     return process_cer_time_columns(df)
 
 def process_abs_time_format(df: pd.DataFrame) -> pd.DataFrame:
@@ -80,6 +80,6 @@ def process_abs_time_format(df: pd.DataFrame) -> pd.DataFrame:
     """
     if 'Year' in df.columns and not df['Year'].empty:
         min_year, max_year = df['Year'].min(), df['Year'].max()
-        print(f"  ✓ABS time format validation: year range {min_year}-{max_year} (integer format, unchanged)")
+        print(f"  ABS time format validation: year range {min_year}-{max_year} (integer format, unchanged)")
     
     return df

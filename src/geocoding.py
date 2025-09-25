@@ -43,7 +43,7 @@ class GoogleMapsQuotaManager:
             
             # Check daily quota
             if self.request_count >= self.daily_limit:
-                print(f"⚠️ Reached Google Maps API daily quota limit: {self.request_count}/{self.daily_limit}")
+                print(f"Warning: Reached Google Maps API daily quota limit: {self.request_count}/{self.daily_limit}")
                 return False
             
             return True
@@ -97,12 +97,12 @@ class GeocodingCache:
             if self.cache_file.exists():
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     self.cache = json.load(f)
-                print(f"✓Geocoding cache loaded: {len(self.cache)} records")
+                print(f"Geocoding cache loaded: {len(self.cache)} records")
             else:
                 self.cache = {}
-                print("✓Geocoding cache file does not exist, creating new cache")
+                print("Geocoding cache file does not exist, creating new cache")
         except Exception as e:
-            print(f"✗Failed to load geocoding cache: {e}")
+            print(f"Failed to load geocoding cache: {e}")
             self.cache = {}
     
     def save_cache(self):
@@ -113,9 +113,9 @@ class GeocodingCache:
                 with open(self.cache_file, 'w', encoding='utf-8') as f:
                     json.dump(self.cache, f, ensure_ascii=False, indent=2)
                 
-                print(f"✓Geocoding cache saved: {len(self.cache)} records")
+                print(f"Geocoding cache saved: {len(self.cache)} records")
         except Exception as e:
-            print(f"✗Failed to save geocoding cache: {e}")
+            print(f"Failed to save geocoding cache: {e}")
     
     def get(self, query: str) -> Optional[Dict]:
         """Get cached result"""
@@ -180,7 +180,7 @@ def initialize_geocoding_cache(cache_file: str = None):
     
     print("Initializing geocoding cache...")
     _global_cache = GeocodingCache(cache_file)
-    print(f"✓Geocoding cache initialization complete: {len(_global_cache.cache)} records loaded")
+    print(f"Geocoding cache initialization complete: {len(_global_cache.cache)} records loaded")
     return _global_cache
 
 def geocode_single_station(args):
@@ -205,7 +205,7 @@ def geocode_single_station(args):
         }
         
     except Exception as e:
-        print(f"  ✗[Thread{thread_id}] Station {idx+1} processing failed: {e}")
+        print(f"  [Thread{thread_id}] Station {idx+1} processing failed: {e}")
         return {
             'idx': idx,
             'success': False,
@@ -274,13 +274,13 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
                     results.append(result)
                     
                     if result['success']:
-                        print(f"  ✓[Thread{threading.get_ident()}] Station {result['idx']+1} geocoding successful")
+                        print(f"  [Thread{threading.get_ident()}] Station {result['idx']+1} geocoding successful")
                     else:
-                        print(f"  ✗[Thread{threading.get_ident()}] Station {result['idx']+1} geocoding failed")
+                        print(f"  [Thread{threading.get_ident()}] Station {result['idx']+1} geocoding failed")
                         
                 except Exception as e:
                     idx = future_to_idx[future]
-                    print(f"  ✗[Thread{threading.get_ident()}] Station {idx+1} thread exception: {e}")
+                    print(f"  [Thread{threading.get_ident()}] Station {idx+1} thread exception: {e}")
                     results.append({
                         'idx': idx,
                         'success': False,
@@ -296,11 +296,11 @@ def add_geocoding_to_cer_data(df: pd.DataFrame, table_type: str, max_workers: in
         print("Saving geocoding cache...")
         save_global_cache()
         
-        print(f"✓Geocoding processing complete: {success_count}/{total_rows} power stations successfully located")
+        print(f"Geocoding processing complete: {success_count}/{total_rows} power stations successfully located")
         return df
         
     except Exception as e:
-        print(f"✗Geocoding processing failed: {e}")
+        print(f"Geocoding processing failed: {e}")
         # Try to save cache even if failed
         save_global_cache()
         return df
@@ -327,7 +327,7 @@ def geocode_single_nger(args):
             'result': geocode_result
         }
     except Exception as e:
-        print(f"  ✗[Thread{thread_id}] Facility {idx+1} processing failed: {e}")
+        print(f"  [Thread{thread_id}] Facility {idx+1} processing failed: {e}")
         return {
             'idx': idx,
             'success': False,
@@ -355,15 +355,15 @@ def add_geocoding_to_nger_data(df: pd.DataFrame, max_workers: int = 5) -> pd.Dat
                     results.append(future.result())
                 except Exception as e:
                     idx = future_to_idx[future]
-                    print(f"  ✗[Thread{threading.get_ident()}] Facility {idx+1} thread exception: {e}")
+                    print(f"  [Thread{threading.get_ident()}] Facility {idx+1} thread exception: {e}")
                     results.append({'idx': idx, 'success': False, 'result': None, 'error': str(e)})
 
         success_count = update_dataframe_with_results(df, results)
-        print(f"✓NGER geocoding processing complete: {success_count}/{total_rows} facilities successfully located")
+        print(f"NGER geocoding processing complete: {success_count}/{total_rows} facilities successfully located")
         save_global_cache()
         return df
     except Exception as e:
-        print(f"✗NGER geocoding processing failed: {e}")
+        print(f"NGER geocoding processing failed: {e}")
         save_global_cache()
         return df
 
@@ -393,7 +393,7 @@ class Geocoder:
         # Quota manager (Essentials level: 10,000 free requests per month)
         self.quota_manager = GoogleMapsQuotaManager(daily_limit=10000, requests_per_second=1.0)
         
-        print(f"✓ Google Maps Geocoding API initialized, daily quota: {self.quota_manager.daily_limit}")
+        print(f"Google Maps Geocoding API initialized, daily quota: {self.quota_manager.daily_limit}")
     
         
     def geocode_query(self, query: str) -> Optional[Dict]:
@@ -588,11 +588,11 @@ class Geocoder:
                 result = self.geocode_query(query)
                 if result:
                     geocode_result.update(result)
-                    print(f"  ✓Geocoding successful: {result.get('formatted_address', 'N/A')}")
+                    print(f"  Geocoding successful: {result.get('formatted_address', 'N/A')}")
                     break
         
         if not geocode_result['lat']: 
-            print(f"  ✗Geocoding failed: tried {len(queries)} queries with no results")
+            print(f"  Geocoding failed: tried {len(queries)} queries with no results")
         return geocode_result
     
     def build_nger_queries(self, row: pd.Series) -> list:
@@ -656,9 +656,9 @@ class Geocoder:
                 result = self.geocode_query(query)
                 if result:
                     geocode_result.update(result)
-                    print(f"  ✓Geocoding successful: {result.get('formatted_address', 'N/A')}")
+                    print(f"  Geocoding successful: {result.get('formatted_address', 'N/A')}")
                     break
         
         if not geocode_result['lat']: 
-            print(f"  ✗Geocoding failed: tried {len(queries)} queries with no results")
+            print(f"  Geocoding failed: tried {len(queries)} queries with no results")
         return geocode_result

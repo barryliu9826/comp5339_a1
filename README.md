@@ -1,74 +1,74 @@
-# 澳大利亚经济数据获取与处理系统
+# Australian Economic Data Acquisition and Processing System
 
-## 项目概述
+## Project Overview
 
-这是一个综合性的数据获取、处理和分析系统，用于自动下载、处理、存储和可视化澳大利亚的经济和能源数据。系统集成了三个主要数据源，将所有数据统一存储到PostgreSQL数据库中，并提供强大的数据清理和探索性数据分析(EDA)功能。
+This is a comprehensive data acquisition, processing, and analysis system for automatically downloading, processing, storing, and visualizing Australian economic and energy data. The system integrates three main data sources, stores all data uniformly in a PostgreSQL database, and provides powerful data cleaning and exploratory data analysis (EDA) capabilities.
 
-## 数据源
+## Data Sources
 
-### 1. NGER数据 (National Greenhouse and Energy Reporting)
-- **数据年份**: 2013-14 到 2023-24 (11个年份)
-- **数据格式**: JSON API响应
-- **存储方式**: 按年份分表存储 (`nger_2013_14`, `nger_2014_15`, ...)
-- **数据量**: 每年约400-800条设施记录
+### 1. NGER Data (National Greenhouse and Energy Reporting)
+- **Data Years**: 2013-14 to 2023-24 (11 years)
+- **Data Format**: JSON API responses
+- **Storage Method**: Separate tables by year (`nger_2013_14`, `nger_2014_15`, ...)
+- **Data Volume**: Approximately 400-800 facility records per year
 
-### 2. ABS数据 (Australian Bureau of Statistics)
-- **数据文件**: `14100DO0003_2011-24.xlsx`
-- **数据内容**: 澳大利亚经济和行业数据
-- **地理级别**: 
-  - **州级数据** (geographic_level = 0): 州、领地和统计区域级别
-  - **地方政府级数据** (geographic_level = 1): 地方政府区域级别
-- **存储方式**: 按业务类型分表，每表包含两个地理级别的数据
-- **数据量**: 州级约29,097行，地方政府级约5,477行
+### 2. ABS Data (Australian Bureau of Statistics)
+- **Data File**: `14100DO0003_2011-24.xlsx`
+- **Data Content**: Australian economic and industry data
+- **Geographic Levels**: 
+  - **State Level Data** (geographic_level = 0): State, territory, and statistical area level
+  - **Local Government Level Data** (geographic_level = 1): Local government area level
+- **Storage Method**: Separate tables by business type, each containing data from both geographic levels
+- **Data Volume**: State level ~29,097 rows, local government level ~5,477 rows
 
-### 3. CER数据 (Clean Energy Regulator)
-- **数据来源**: CER官网表格数据
-- **数据类型**: 
-  - `cer_approved_power_stations`: 已批准电站 (~280条记录)
-  - `cer_committed_power_stations`: 已承诺电站 (~35条记录)
-  - `cer_probable_power_stations`: 可能建设电站 (~49条记录)
-- **获取方式**: Selenium自动化网页爬取
+### 3. CER Data (Clean Energy Regulator)
+- **Data Source**: CER official website table data
+- **Data Types**: 
+  - `cer_approved_power_stations`: Approved power stations (~280 records)
+  - `cer_committed_power_stations`: Committed power stations (~35 records)
+  - `cer_probable_power_stations`: Probable power stations (~49 records)
+- **Acquisition Method**: Selenium automated web scraping
 
-## 系统架构
+## System Architecture
 
-### 核心文件
+### Core Files
 
 ```
 src/
-├── data_acquisition_processor.py  # 主处理程序 (545行)
-├── database_config.py            # 数据库配置和操作 (820行)
-├── geocoding.py                  # 地理编码与缓存 (658行)
-├── excel_utils.py                # Excel处理工具 (55行)
-├── state_standardizer.py         # 州名标准化工具 (227行)
-├── time_format_utils.py          # 时间格式处理工具 (154行)
-├── data_cleaner.py               # 统一数据清理模块 (1169行)
-└── eda_visualization.py          # 探索性数据分析可视化 (204行)
+├── data_acquisition_processor.py  # Main processing program (517 lines)
+├── database_config.py            # Database configuration and operations (1044 lines)
+├── geocoding.py                  # Geocoding and caching (665 lines)
+├── excel_utils.py                # Excel processing tools (86 lines)
+├── state_standardizer.py         # State name standardization tools (189 lines)
+├── time_format_utils.py          # Time format processing tools (86 lines)
+├── data_cleaner.py               # Unified data cleaning module (1169 lines)
+└── eda_visualization.py          # Exploratory data analysis visualization (215 lines)
 
 data/
-├── nger_data_api_links.csv       # NGER API链接
-├── 14100DO0003_2011-24.xlsx     # ABS Excel数据
-├── geocoding_cache.json         # 地理编码持久化缓存
-└── eda/                          # EDA可视化输出目录
+├── nger_data_api_links.csv       # NGER API links
+├── 14100DO0003_2011-24.xlsx     # ABS Excel data
+├── geocoding_cache.json         # Geocoding persistent cache
+└── eda/                          # EDA visualization output directory
     ├── abs_overview_geographic_level.png
     ├── cer_map_categories.png
     └── nger_map_by_fuel.png
 ```
 
-### 技术栈
+### Technology Stack
 
-- **Python 3.11+** (conda环境: comp5339)
-- **数据处理**: pandas>=2.3.0, openpyxl>=3.1.0, numpy>=2.3.0
-- **数据可视化**: matplotlib>=3.9.0, seaborn>=0.13.2
-- **网络请求**: requests>=2.32.0
-- **网页爬虫**: selenium>=4.35.0 (Chrome WebDriver)
-- **数据库**: PostgreSQL (psycopg2-binary>=2.9.0)
-- **地理编码**: Nominatim API (通过requests)
-- **Excel处理**: openpyxl (合并单元格解析)
-- **类型提示**: typing-extensions>=4.0.0
+- **Python 3.11+** (conda environment: comp5339)
+- **Data Processing**: pandas>=2.3.0, openpyxl>=3.1.0, numpy>=2.3.0
+- **Data Visualization**: matplotlib>=3.9.0, seaborn>=0.13.2
+- **Network Requests**: requests>=2.32.0
+- **Web Scraping**: selenium>=4.35.0 (Chrome WebDriver)
+- **Database**: PostgreSQL (psycopg2-binary>=2.9.0)
+- **Geocoding**: Nominatim API (via requests)
+- **Excel Processing**: openpyxl (merged cell parsing)
+- **Type Hints**: typing-extensions>=4.0.0
 
-## 数据库设计
+## Database Design
 
-### 连接配置
+### Connection Configuration
 ```python
 DB_CONFIG = {
     'host': 'localhost',
@@ -79,32 +79,32 @@ DB_CONFIG = {
 }
 ```
 
-### 表结构设计
+### Table Structure Design
 
-#### NGER表 (按年份分表)
+#### NGER Tables (separate tables by year)
 ```sql
 CREATE TABLE nger_2023_24 (
     id SERIAL PRIMARY KEY,
     facility_name TEXT,
     state TEXT,
     postcode TEXT,
-    -- 其他动态列...
+    -- Other dynamic columns...
 );
 ```
 
-#### ABS表 (按业务类型分表)
+#### ABS Tables (separate tables by business type)
 ```sql
 CREATE TABLE business_entries__year_ended_30_june (
     id SERIAL PRIMARY KEY,
-    code TEXT,                    -- 地区代码
-    label TEXT,                   -- 地区名称
-    year INTEGER,                 -- 年份
-    geographic_level INTEGER,     -- 地理级别 (0=州级, 1=地方政府级)
-    -- 业务数据列...
+    code TEXT,                    -- Region code
+    label TEXT,                   -- Region name
+    year INTEGER,                 -- Year
+    geographic_level INTEGER,     -- Geographic level (0=state, 1=local government)
+    -- Business data columns...
 );
 ```
 
-#### CER表 (按电站类型分表)
+#### CER Tables (separate tables by power station type)
 ```sql
 CREATE TABLE cer_approved_power_stations (
     id SERIAL PRIMARY KEY,
@@ -115,306 +115,306 @@ CREATE TABLE cer_approved_power_stations (
 );
 ```
 
-### 地理级别编码
+### Geographic Level Encoding
 
-| 编码 | 含义 | 数据来源 | 记录数量 |
-|------|------|----------|----------|
-| 0 | 州级政府 | Table 1 | ~29,097行 |
-| 1 | 地方政府级 | Table 2 | ~5,477行 |
+| Code | Meaning | Data Source | Record Count |
+|------|---------|-------------|--------------|
+| 0 | State Level | Table 1 | ~29,097 rows |
+| 1 | Local Government Level | Table 2 | ~5,477 rows |
 
-## 使用方法
+## Usage Instructions
 
-### 环境准备
+### Environment Setup
 
 ```bash
-# 激活conda环境
+# Activate conda environment
 conda activate comp5339
 
-# 确保PostgreSQL运行
-# 用户名: postgres, 密码: postgre, 端口: 5432
+# Ensure PostgreSQL is running
+# Username: postgres, Password: postgre, Port: 5432
 ```
 
-### 使用 pip 安装依赖（推荐方案）
+### Using pip to install dependencies (Recommended)
 
-使用内置 `venv` 和 `pip` 安装所有依赖：
+Use built-in `venv` and `pip` to install all dependencies:
 
 ```bash
-# 1) 创建并激活虚拟环境（macOS/Linux）
+# 1) Create and activate virtual environment (macOS/Linux)
 python3 -m venv .venv
 source .venv/bin/activate
 
-# 2) 升级 pip 并安装依赖
+# 2) Upgrade pip and install dependencies
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-# 3) 运行程序
+# 3) Run the program
 python src/data_acquisition_processor.py
 ```
 
-### 使用 conda 环境（可选方案）
+### Using conda environment (Optional)
 
 ```bash
-# 激活conda环境
+# Activate conda environment
 conda activate comp5339
 
-# 安装依赖
+# Install dependencies
 pip install -r requirements.txt
 
-# 运行程序
+# Run the program
 python src/data_acquisition_processor.py
 ```
 
-### 开发环境要求与说明
+### Development Environment Requirements
 
-- **Python 3.11+**（建议）
-- **Google Chrome**: Selenium 4.20+ 默认使用 Selenium Manager 自动下载驱动，无需手动配置 chromedriver
-- **PostgreSQL**: 本地可用，且账户配置与 `src/database_config.py` 中的 `DB_CONFIG` 一致
-- **网络环境**: 如果网络环境受限，地理编码（Nominatim）可能失败或变慢；可多次重试或离线运行仅数据库流程
+- **Python 3.11+** (recommended)
+- **Google Chrome**: Selenium 4.20+ uses Selenium Manager by default to automatically download drivers, no manual chromedriver configuration needed
+- **PostgreSQL**: Locally available with account configuration matching `DB_CONFIG` in `src/database_config.py`
+- **Network Environment**: If network is restricted, geocoding (Nominatim) may fail or be slow; can retry multiple times or run database-only processes offline
 
-### 运行数据获取
+### Running Data Acquisition
 
 ```bash
-# 运行完整的数据获取和处理流程
+# Run complete data acquisition and processing workflow
 python src/data_acquisition_processor.py
 ```
 
-### 运行EDA可视化分析
+### Running EDA Visualization Analysis
 
 ```bash
-# 生成探索性数据分析图表
+# Generate exploratory data analysis charts
 python src/eda_visualization.py
 ```
 
-这将生成以下可视化图表并保存到 `data/eda/` 目录：
-- **CER电站分布图** (`cer_map_categories.png`): 按类别显示已批准、已承诺和可能建设的电站位置
-- **NGER设施分布图** (`nger_map_by_fuel.png`): 按主要燃料类型显示NGER设施的地理分布
-- **ABS地理级别概览** (`abs_overview_geographic_level.png`): 显示ABS数据中州级和地方政府级数据的分布情况
+This will generate the following visualization charts and save them to the `data/eda/` directory:
+- **CER Power Station Distribution Map** (`cer_map_categories.png`): Shows approved, committed, and probable power station locations by category
+- **NGER Facility Distribution Map** (`nger_map_by_fuel.png`): Shows geographic distribution of NGER facilities by primary fuel type
+- **ABS Geographic Level Overview** (`abs_overview_geographic_level.png`): Shows distribution of state-level and local government-level data in ABS data
 
-### 数据查询示例
+### Data Query Examples
 
 ```sql
--- 查询2023年州级商业数据
+-- Query 2023 state-level business data
 SELECT * FROM business_entries__year_ended_30_june 
 WHERE geographic_level = 0 AND year = 2023;
 
--- 统计不同级别的数据量
+-- Count data by different levels
 SELECT 
     CASE geographic_level 
-        WHEN 0 THEN '州级'
-        WHEN 1 THEN '地方政府级'
+        WHEN 0 THEN 'State Level'
+        WHEN 1 THEN 'Local Government Level'
     END as level_name,
     COUNT(*) as count
 FROM business_entries__year_ended_30_june 
 GROUP BY geographic_level;
 
--- 查询特定年份的NGER设施
+-- Query NGER facilities for specific year
 SELECT facility_name, state, postcode 
 FROM nger_2023_24 
 WHERE state = 'NSW';
 
--- 查询已批准的电站
+-- Query approved power stations
 SELECT power_station_name, state 
 FROM cer_approved_power_stations 
 WHERE state = 'NSW';
 ```
 
-## 系统特性
+## System Features
 
-### 🚀 性能优化
-- **连接共享**: 所有数据源共享单一数据库连接
-- **批量插入**: 10,000条记录为一批，优化大数据量处理
-- **数字编码**: 使用INTEGER类型替代TEXT，提升查询性能
-- **智能去重**: 自动处理重复列名和空列
-- **地理编码缓存**: 内存+文件双层缓存，避免重复调用，提高速度
-- **数据清理优化**: 统一的数据清理模块，提高数据处理效率
+### 🚀 Performance Optimization
+- **Connection Sharing**: All data sources share a single database connection
+- **Batch Insertion**: 10,000 records per batch, optimized for large data processing
+- **Numeric Encoding**: Uses INTEGER type instead of TEXT, improving query performance
+- **Smart Deduplication**: Automatically handles duplicate column names and empty columns
+- **Geocoding Cache**: Memory + file dual-layer cache, avoiding duplicate calls, improving speed
+- **Data Cleaning Optimization**: Unified data cleaning module, improving data processing efficiency
 
-### 🛡️ 错误处理
-- **连接管理**: 自动重试和连接恢复
-- **事务回滚**: 操作失败时自动回滚
-- **数据验证**: 自动过滤无效数据和空列
-- **异常日志**: 详细的错误信息和处理状态
- - **缓存安全**: 保存缓存时直接覆盖，不再创建.backup
+### 🛡️ Error Handling
+- **Connection Management**: Automatic retry and connection recovery
+- **Transaction Rollback**: Automatic rollback on operation failure
+- **Data Validation**: Automatically filters invalid data and empty columns
+- **Exception Logging**: Detailed error information and processing status
+- **Cache Safety**: Direct overwrite when saving cache, no longer creates .backup files
 
-### 🔧 代码质量
-- **模块化设计**: 数据库操作与业务逻辑分离
-- **函数复用**: 统一的列名清理和数据处理逻辑
-- **类型安全**: 严格的类型注解和参数验证
-- **文档完善**: 详细的函数文档和使用说明
-- **数据可视化**: 专业的EDA可视化模块，支持多种图表类型
+### 🔧 Code Quality
+- **Modular Design**: Separation of database operations and business logic
+- **Function Reuse**: Unified column name cleaning and data processing logic
+- **Type Safety**: Strict type annotations and parameter validation
+- **Complete Documentation**: Detailed function documentation and usage instructions
+- **Data Visualization**: Professional EDA visualization module supporting multiple chart types
 
-## 数据获取状态
+## Data Acquisition Status
 
-### ✅ 已完成
-- [x] NGER数据下载 (2013-2024年，11个文件)
-- [x] ABS经济数据下载和处理
-- [x] CER网站数据爬取
-- [x] PostgreSQL数据库集成
-- [x] 表结构优化和统一
-- [x] 批量数据插入优化
-- [x] 连接共享和性能优化
-- [x] 代码模块化和精简
-- [x] 统一数据清理模块
-- [x] 探索性数据分析可视化
+### ✅ Completed
+- [x] NGER data download (2013-2024, 11 files)
+- [x] ABS economic data download and processing
+- [x] CER website data scraping
+- [x] PostgreSQL database integration
+- [x] Table structure optimization and unification
+- [x] Batch data insertion optimization
+- [x] Connection sharing and performance optimization
+- [x] Code modularization and simplification
+- [x] Unified data cleaning module
+- [x] Exploratory data analysis visualization
 
-### 📊 数据统计
-- **NGER表**: 11张 (按年份: 2013-14 到 2023-24)
-- **ABS表**: 15张 (按业务类型，包含两个地理级别)
-- **CER表**: 3张 (按电站类型: approved, committed, probable)
-- **总数据量**: 约60万+条记录
-- **地理编码缓存**: 自动缓存，避免重复API调用
-- **EDA可视化**: 3种专业图表类型，支持地理分布和统计分析
+### 📊 Data Statistics
+- **NGER Tables**: 11 tables (by year: 2013-14 to 2023-24)
+- **ABS Tables**: 15 tables (by business type, containing both geographic levels)
+- **CER Tables**: 3 tables (by power station type: approved, committed, probable)
+- **Total Data Volume**: Approximately 600,000+ records
+- **Geocoding Cache**: Automatic caching, avoiding duplicate API calls
+- **EDA Visualization**: 3 professional chart types, supporting geographic distribution and statistical analysis
 
-## 项目文件说明
+## Project File Descriptions
 
-### 核心处理文件
-- **`src/data_acquisition_processor.py`** (545行): 主数据获取和处理程序
-  - NGER数据下载和JSON处理
-  - ABS Excel文件读取和合并单元格解析
-  - CER网站数据爬取和分页处理
-  - 统一的PostgreSQL数据存储
-  - 多线程并发处理优化
+### Core Processing Files
+- **`src/data_acquisition_processor.py`** (517 lines): Main data acquisition and processing program
+  - NGER data download and JSON processing
+  - ABS Excel file reading and merged cell parsing
+  - CER website data scraping and pagination handling
+  - Unified PostgreSQL data storage
+  - Multi-threaded concurrent processing optimization
 
-- **`src/database_config.py`** (820行): 数据库配置和操作模块
-  - 数据库连接池管理
-  - 表创建和数据插入函数
-  - 列名清理和去重逻辑
-  - 批量插入优化
-  - 线程安全的数据库操作
+- **`src/database_config.py`** (1044 lines): Database configuration and operations module
+  - Database connection pool management
+  - Table creation and data insertion functions
+  - Column name cleaning and deduplication logic
+  - Batch insertion optimization
+  - Thread-safe database operations
 
-- **`src/geocoding.py`** (658行): 地理编码与缓存模块
-  - Nominatim API集成
-  - 内存+文件双层缓存
-  - 多线程地理编码处理
-  - 线程安全的缓存管理
+- **`src/geocoding.py`** (665 lines): Geocoding and caching module
+  - Nominatim API integration
+  - Memory + file dual-layer cache
+  - Multi-threaded geocoding processing
+  - Thread-safe cache management
 
-- **`src/excel_utils.py`** (55行): Excel处理工具模块
-  - 合并单元格解析
-  - 多级表头处理
-  - 动态列名生成
+- **`src/excel_utils.py`** (86 lines): Excel processing tools module
+  - Merged cell parsing
+  - Multi-level header processing
+  - Dynamic column name generation
 
-- **`src/state_standardizer.py`** (227行): 州名标准化工具模块
-  - 澳大利亚州名标准化映射
-  - 支持英文全名、缩写、数字代码转换
-  - DataFrame批量州名标准化处理
-  - 容错处理和数据清理
+- **`src/state_standardizer.py`** (189 lines): State name standardization tools module
+  - Australian state name standardization mapping
+  - Supports English full names, abbreviations, numeric code conversion
+  - DataFrame batch state name standardization processing
+  - Error handling and data cleaning
 
-- **`src/time_format_utils.py`** (154行): 时间格式处理工具模块
-  - NGER年份标签拆分 (如 "2023-24" → start_year, stop_year)
-  - CER时间格式标准化处理
-  - ABS时间数据格式统一
-  - 多种时间格式的自动识别和转换
+- **`src/time_format_utils.py`** (86 lines): Time format processing tools module
+  - NGER year label splitting (e.g., "2023-24" → start_year, stop_year)
+  - CER time format standardization processing
+  - ABS time data format unification
+  - Automatic recognition and conversion of multiple time formats
 
-- **`src/data_cleaner.py`** (1169行): 统一数据清理模块
-  - 综合数据清理和规范化功能
-  - 缺失值处理和数据类型转换
-  - 字符串清理和标准化
-  - 数据质量验证和修复
-  - 支持多种数据源的统一清理流程
+- **`src/data_cleaner.py`** (1169 lines): Unified data cleaning module
+  - Comprehensive data cleaning and normalization functions
+  - Missing value handling and data type conversion
+  - String cleaning and standardization
+  - Data quality validation and repair
+  - Unified cleaning workflow supporting multiple data sources
 
-- **`src/eda_visualization.py`** (204行): 探索性数据分析可视化模块
-  - CER电站地理分布可视化
-  - NGER设施按燃料类型分布图
-  - ABS数据地理级别统计分析
-  - 专业的matplotlib和seaborn图表生成
-  - 自动保存高分辨率图表到指定目录
+- **`src/eda_visualization.py`** (215 lines): Exploratory data analysis visualization module
+  - CER power station geographic distribution visualization
+  - NGER facility distribution by fuel type
+  - ABS data geographic level statistical analysis
+  - Professional matplotlib and seaborn chart generation
+  - Automatic saving of high-resolution charts to specified directory
 
-### 数据文件
-- **`data/nger_data_api_links.csv`**: NGER数据API链接
-- **`data/14100DO0003_2011-24.xlsx`**: ABS经济数据Excel文件
-- **`data/geocoding_cache.json`**: 地理编码持久化缓存文件
-- **`data/eda/`**: EDA可视化输出目录
-  - `abs_overview_geographic_level.png`: ABS地理级别分布图
-  - `cer_map_categories.png`: CER电站类别分布图
-  - `nger_map_by_fuel.png`: NGER设施燃料类型分布图
+### Data Files
+- **`data/nger_data_api_links.csv`**: NGER data API links
+- **`data/14100DO0003_2011-24.xlsx`**: ABS economic data Excel file
+- **`data/geocoding_cache.json`**: Geocoding persistent cache file
+- **`data/eda/`**: EDA visualization output directory
+  - `abs_overview_geographic_level.png`: ABS geographic level distribution chart
+  - `cer_map_categories.png`: CER power station category distribution chart
+  - `nger_map_by_fuel.png`: NGER facility fuel type distribution chart
 
-## 技术亮点
+## Technical Highlights
 
-### 1. Excel合并单元格处理
-- 自动识别和解析Excel中的合并单元格
-- 支持多级表头结构
-- 动态生成列名和表结构
+### 1. Excel Merged Cell Processing
+- Automatically identifies and parses merged cells in Excel
+- Supports multi-level header structures
+- Dynamically generates column names and table structures
 
-### 2. 网页数据爬取
-- Selenium自动化爬取动态网页内容
-- 智能分页检测和处理
-- 表格类型自动识别
+### 2. Web Data Scraping
+- Selenium automated scraping of dynamic web content
+- Intelligent pagination detection and processing
+- Automatic table type identification
 
-### 3. 数据库优化
-- 动态表结构生成
-- 批量数据插入优化
-- 智能列名清理和去重
-- 连接池化管理
+### 3. Database Optimization
+- Dynamic table structure generation
+- Batch data insertion optimization
+- Intelligent column name cleaning and deduplication
+- Connection pool management
 
-### 4. 代码架构
-- 模块化设计，职责分离
-- 统一的错误处理机制
-- 可扩展的数据源集成架构
-- 完善的日志和监控
+### 4. Code Architecture
+- Modular design with separated responsibilities
+- Unified error handling mechanism
+- Extensible data source integration architecture
+- Complete logging and monitoring
 
-### 5. 地理编码与缓存
-- 使用 Nominatim API（遵守速率限制，约1.1秒/请求）
-- `src/geocoding.py` 提供地理编码与缓存（内存+JSON持久化）
-- 多线程环境下使用线程安全的全局缓存
-- 主流程结束时自动保存 `data/geocoding_cache.json`
+### 5. Geocoding and Caching
+- Uses Nominatim API (respects rate limits, ~1.1 seconds/request)
+- `src/geocoding.py` provides geocoding and caching (memory + JSON persistence)
+- Thread-safe global cache in multi-threaded environments
+- Automatically saves `data/geocoding_cache.json` at end of main process
 
-### 6. 数据清理与质量保证
-- `src/data_cleaner.py` 提供统一的数据清理和规范化功能
-- 支持多种数据源的清理流程
-- 自动处理缺失值、数据类型转换和字符串标准化
-- 数据质量验证和修复机制
+### 6. Data Cleaning and Quality Assurance
+- `src/data_cleaner.py` provides unified data cleaning and normalization functions
+- Supports cleaning workflows for multiple data sources
+- Automatically handles missing values, data type conversion, and string standardization
+- Data quality validation and repair mechanisms
 
-### 7. 探索性数据分析可视化
-- `src/eda_visualization.py` 提供专业的数据可视化功能
-- 支持地理分布图、统计图表等多种可视化类型
-- 使用matplotlib和seaborn生成高质量图表
-- 自动保存高分辨率图片到指定目录
+### 7. Exploratory Data Analysis Visualization
+- `src/eda_visualization.py` provides professional data visualization functions
+- Supports geographic distribution maps, statistical charts, and other visualization types
+- Uses matplotlib and seaborn to generate high-quality charts
+- Automatically saves high-resolution images to specified directory
 
-## 开发历程
+## Development History
 
-### 主要里程碑
-1. **数据获取**: 实现三个数据源的自动下载
-2. **Excel处理**: 解决复杂合并单元格解析问题
-3. **数据库集成**: 统一数据存储到PostgreSQL
-4. **性能优化**: 批量插入和连接共享优化
-5. **代码重构**: 模块化和精简优化
-6. **业务优化**: 数字编码和表结构统一
-7. **数据清理**: 统一数据清理和质量保证模块
-8. **数据可视化**: 探索性数据分析和可视化功能
+### Major Milestones
+1. **Data Acquisition**: Implemented automatic download from three data sources
+2. **Excel Processing**: Solved complex merged cell parsing problems
+3. **Database Integration**: Unified data storage to PostgreSQL
+4. **Performance Optimization**: Batch insertion and connection sharing optimization
+5. **Code Refactoring**: Modularization and simplification optimization
+6. **Business Optimization**: Numeric encoding and table structure unification
+7. **Data Cleaning**: Unified data cleaning and quality assurance module
+8. **Data Visualization**: Exploratory data analysis and visualization functionality
 
-### 技术挑战解决
-- ✅ NGER数据下载循环问题修复
-- ✅ Excel合并单元格多级表头解析
-- ✅ CER网站动态内容爬取和分页处理
-- ✅ PostgreSQL批量插入性能优化
-- ✅ 列名重复和特殊字符处理
-- ✅ 数据库连接管理和事务处理
-- ✅ 统一数据清理和质量保证机制
-- ✅ 专业数据可视化和图表生成
+### Technical Challenge Solutions
+- ✅ NGER data download loop issue fix
+- ✅ Excel merged cell multi-level header parsing
+- ✅ CER website dynamic content scraping and pagination handling
+- ✅ PostgreSQL batch insertion performance optimization
+- ✅ Column name duplication and special character handling
+- ✅ Database connection management and transaction processing
+- ✅ Unified data cleaning and quality assurance mechanism
+- ✅ Professional data visualization and chart generation
 
-## 未来扩展
+## Future Extensions
 
-### 待实现功能
-- [ ] 数据质量监控和报告
-- [ ] 自动化数据更新调度
-- [ ] 数据可视化仪表板
-- [ ] API接口开发
+### Features to Implement
+- [ ] Data quality monitoring and reporting
+- [ ] Automated data update scheduling
+- [ ] Data visualization dashboard
+- [ ] API interface development
 
-### 性能优化空间
-- [ ] 数据库索引优化
-- [ ] 查询性能调优
-- [ ] 并发处理优化
+### Performance Optimization Opportunities
+- [ ] Database index optimization
+- [ ] Query performance tuning
+- [ ] Concurrent processing optimization
 
-## 地理编码与缓存使用说明
+## Geocoding and Cache Usage Instructions
 
-### 自动集成（推荐）
+### Automatic Integration (Recommended)
 
-运行主处理程序时会自动对 CER 表进行地理编码并写入缓存：
+Running the main processing program will automatically geocode CER tables and write to cache:
 
 ```bash
 python src/data_acquisition_processor.py
 ```
 
-### 在代码中使用
+### Using in Code
 
 ```python
 from geocoding import Geocoder, save_global_cache
@@ -422,45 +422,45 @@ from geocoding import Geocoder, save_global_cache
 geocoder = Geocoder(use_persistent_cache=True)
 result = geocoder.geocode_query("Sydney, NSW, Australia")
 
-# 退出前可手动保存（主流程已自动保存）
+# Can manually save before exit (main process already auto-saves)
 save_global_cache()
 ```
 
-### 缓存文件
+### Cache File
 
-- 位置: `data/geocoding_cache.json`
-- 保存策略: 直接覆盖保存，不再生成 `.backup` 文件
+- Location: `data/geocoding_cache.json`
+- Save Strategy: Direct overwrite save, no longer generates `.backup` files
 
-## 项目状态
+## Project Status
 
-### 当前版本特性
-- ✅ 完整的八模块架构 (数据获取、数据库、地理编码、Excel处理、州名标准化、时间格式处理、数据清理、EDA可视化)
-- ✅ 多线程并发处理优化
-- ✅ 地理编码缓存系统
-- ✅ Excel合并单元格智能解析
-- ✅ 数据库连接池管理
-- ✅ 线程安全的操作设计
-- ✅ 州名标准化和时间格式统一处理
-- ✅ 统一数据清理和质量保证
-- ✅ 专业数据可视化和EDA分析
+### Current Version Features
+- ✅ Complete eight-module architecture (data acquisition, database, geocoding, Excel processing, state standardization, time format processing, data cleaning, EDA visualization)
+- ✅ Multi-threaded concurrent processing optimization
+- ✅ Geocoding cache system
+- ✅ Excel merged cell intelligent parsing
+- ✅ Database connection pool management
+- ✅ Thread-safe operation design
+- ✅ State name standardization and time format unified processing
+- ✅ Unified data cleaning and quality assurance
+- ✅ Professional data visualization and EDA analysis
 
-### 最近更新 (2024年9月26日)
-- 🆕 新增 `data_cleaner.py` 模块 (1169行): 统一数据清理和质量保证模块
-- 🆕 新增 `eda_visualization.py` 模块 (204行): 探索性数据分析可视化模块
-- 🆕 新增 `state_standardizer.py` 模块 (227行): 澳大利亚州名标准化工具
-- 🆕 新增 `time_format_utils.py` 模块 (154行): 时间格式处理工具
-- 📝 扩展为八模块架构，增强数据处理和可视化能力
-- 📝 更新了所有模块的文件行数统计
-- 📝 完善了模块功能说明和技术文档
-- 📝 更新了requirements.txt，包含数据可视化依赖
-- 📝 新增EDA可视化输出目录和图表说明
+### Recent Updates (September 26, 2024)
+- 🆕 Added `data_cleaner.py` module (1169 lines): Unified data cleaning and quality assurance module
+- 🆕 Added `eda_visualization.py` module (215 lines): Exploratory data analysis visualization module
+- 🆕 Added `state_standardizer.py` module (189 lines): Australian state name standardization tool
+- 🆕 Added `time_format_utils.py` module (86 lines): Time format processing tool
+- 📝 Expanded to eight-module architecture, enhanced data processing and visualization capabilities
+- 📝 Updated file line count statistics for all modules
+- 📝 Improved module function descriptions and technical documentation
+- 📝 Updated requirements.txt to include data visualization dependencies
+- 📝 Added EDA visualization output directory and chart descriptions
 
-## 联系信息
+## Contact Information
 
-- **项目**: COMP5339 Assignment 1
-- **环境**: conda comp5339 或 Python venv
-- **数据库**: PostgreSQL localhost:5432
+- **Project**: COMP5339 Assignment 1
+- **Environment**: conda comp5339 or Python venv
+- **Database**: PostgreSQL localhost:5432
 
 ---
 
-*最后更新: 2024年9月26日*
+*Last updated: September 26, 2024*

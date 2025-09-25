@@ -1,41 +1,37 @@
 #!/usr/bin/env python3
 """
-统一数据清理模块
-整合所有数据清理、规范化和质量修复功能
+Unified Data Cleaning Module
+Integrates all data cleaning, normalization, and quality repair functionality
 """
 
 import pandas as pd
 import re
 from typing import Dict, List, Set, Optional, Any, Tuple
 
-
 # =============================================================================
-# 常量定义
+# Constants Definition
 # =============================================================================
 
-# 月份缩写到数字的映射（通用）
+# Month abbreviation to number mapping (general)
 MONTH_ABBR_TO_NUM = {
     'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
     'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
 }
 
-# 缺失值标识（通用）
+# Missing value indicators (general)
 MISSING_VALUE_INDICATORS = ['-', '', 'nan', 'NaN', 'none', 'None', 'NULL', 'null', 'N/A', 'n/a']
 
-
 # =============================================================================
-# 通用辅助函数
+# General Helper Functions
 # =============================================================================
 
 def is_missing_value(value: Any) -> bool:
     """
-    检查值是否为缺失值
-    
+    Check if a value is a missing value
     Args:
-        value: 要检查的值
-        
+        value: Value to check
     Returns:
-        True如果是缺失值，False否则
+        True if it's a missing value, False otherwise
     """
     if pd.isna(value) or value is None:
         return True
@@ -43,26 +39,23 @@ def is_missing_value(value: Any) -> bool:
     str_val = str(value).strip()
     return str_val in MISSING_VALUE_INDICATORS or str_val.lower() in [x.lower() for x in MISSING_VALUE_INDICATORS]
 
-
 # =============================================================================
-# 数据库列名规范化功能 (原 db_column_normalizer.py)
+# Database Column Name Normalization Functions (originally db_column_normalizer.py)
 # =============================================================================
 
 def normalize_db_column_name(name: str, reserved_words: Set[str] = None) -> str:
     """
-    规范化数据库列名
-    
+    Normalize database column names
     Args:
-        name: 原始列名
-        reserved_words: 数据库保留字集合
-        
+        name: Original column name
+        reserved_words: Set of database reserved words
     Returns:
-        规范化后的列名
+        Normalized column name
     """
     if not name or str(name).strip() == '':
         return 'unnamed_column'
     
-    # 默认的PostgreSQL保留字
+    # Default PostgreSQL reserved words
     if reserved_words is None:
         reserved_words = {
             'user', 'order', 'group', 'select', 'from', 'where', 'insert', 'update', 
@@ -73,14 +66,14 @@ def normalize_db_column_name(name: str, reserved_words: Set[str] = None) -> str:
             'real', 'double', 'precision', 'decimal', 'char', 'binary', 'blob'
         }
     
-    # 第1步：基础清理
+    # Step 1: Basic cleaning
     clean_name = str(name).strip()
     
-    # 第2步：转换为小写
+    # Step 2: Convert to lowercase
     clean_name = clean_name.lower()
     
-    # 第3步：处理特殊字符和缩写
-    # 常见的单位和缩写规范化
+    # Step 3: Handle special characters and abbreviations
+    # Common unit and abbreviation normalization
     unit_replacements = {
         r'\(mw\)': '_mw',
         r'\(gj\)': '_gj', 
@@ -94,46 +87,43 @@ def normalize_db_column_name(name: str, reserved_words: Set[str] = None) -> str:
     for pattern, replacement in unit_replacements.items():
         clean_name = re.sub(pattern, replacement, clean_name)
     
-    # 第4步：移除其他特殊字符，保留字母数字和空格
+    # Step 4: Remove other special characters, keep alphanumeric and spaces
     clean_name = re.sub(r'[^\w\s]', '', clean_name)
     
-    # 第5步：空格转下划线
+    # Step 5: Convert spaces to underscores
     clean_name = re.sub(r'\s+', '_', clean_name)
     
-    # 第6步：多个下划线合并为一个
+    # Step 6: Merge multiple underscores into one
     clean_name = re.sub(r'_+', '_', clean_name)
     
-    # 第7步：去除首尾下划线
+    # Step 7: Remove leading and trailing underscores
     clean_name = clean_name.strip('_')
     
-    # 第8步：处理空结果
+    # Step 8: Handle empty results
     if not clean_name:
         clean_name = 'unnamed_column'
     
-    # 第9步：如果以数字开头，添加前缀
+    # Step 9: Add prefix if starts with digit
     if clean_name[0].isdigit():
         clean_name = f'col_{clean_name}'
     
-    # 第10步：检查是否为保留字
+    # Step 10: Check if it's a reserved word
     if clean_name.lower() in reserved_words:
         clean_name = f'{clean_name}_col'
     
-    # 第11步：长度限制（PostgreSQL标识符限制为63字符）
-    if len(clean_name) > 60:  # 留3个字符给可能的后缀
+    # Step 11: Length limit (PostgreSQL identifier limit is 63 characters)
+    if len(clean_name) > 60:  # Leave 3 characters for possible suffix
         clean_name = clean_name[:60]
     
     return clean_name
 
-
 def normalize_column_mapping(columns: List[str]) -> List[str]:
     """
-    按输入顺序返回等长的规范化列名列表（确保唯一性）
-    
+    Return normalized column name list of equal length in input order (ensuring uniqueness)
     Args:
-        columns: 原始列名列表
-        
+        columns: Original column name list
     Returns:
-        与输入等长的规范化列名列表（位置对齐），会对重复名添加 _1/_2 后缀
+        Normalized column name list of equal length (position aligned), adds _1/_2 suffix for duplicates
     """
     normalized_list = []
     used_names = set()
@@ -141,7 +131,7 @@ def normalize_column_mapping(columns: List[str]) -> List[str]:
     for original_col in columns:
         normalized = normalize_db_column_name(original_col)
         
-        # 处理重复的规范化名称（基于出现顺序）
+        # Handle duplicate normalized names (based on occurrence order)
         if normalized in used_names:
             counter = 1
             base_name = normalized
@@ -154,37 +144,34 @@ def normalize_column_mapping(columns: List[str]) -> List[str]:
     
     return normalized_list
 
-
 def create_table_sql_with_normalized_columns(table_name: str, 
                                            column_definitions: Dict[str, str],
                                            primary_key: str = 'id',
                                            additional_constraints: List[str] = None) -> str:
     """
-    创建带有规范化列名的建表SQL
-    
+    Create table SQL with normalized column names
     Args:
-        table_name: 表名
-        column_definitions: {规范化列名: SQL类型} 字典
-        primary_key: 主键列名
-        additional_constraints: 额外的约束条件
-        
+        table_name: Table name
+        column_definitions: Dictionary of {normalized column name: SQL type}
+        primary_key: Primary key column name
+        additional_constraints: Additional constraint conditions
     Returns:
-        建表SQL语句
+        CREATE TABLE SQL statement
     """
-    # 规范化表名
+    # Normalize table name
     normalized_table_name = normalize_db_column_name(table_name)
     
-    # 构建列定义（确保列名唯一）
+    # Build column definitions (ensure column name uniqueness)
     column_parts = []
     used_norm_cols = set()
     
-    # 主键
+    # Primary key
     pk_norm = normalize_db_column_name(primary_key)
     if primary_key not in column_definitions:
         column_parts.append(f"{pk_norm} SERIAL PRIMARY KEY")
         used_norm_cols.add(pk_norm)
     
-    # 其他列
+    # Other columns
     for col_name, col_type in column_definitions.items():
         norm = normalize_db_column_name(col_name)
         base = norm
@@ -196,7 +183,7 @@ def create_table_sql_with_normalized_columns(table_name: str,
         used_norm_cols.add(norm)
         column_parts.append(f"{norm} {col_type}")
     
-    # 额外约束
+    # Additional constraints
     if additional_constraints:
         column_parts.extend(additional_constraints)
     
@@ -206,16 +193,14 @@ def create_table_sql_with_normalized_columns(table_name: str,
     
     return sql
 
-
 def get_standard_column_types() -> Dict[str, str]:
     """
-    获取标准的列类型映射
-    
+    Get standard column type mapping
     Returns:
-        {列名模式: SQL类型} 字典
+        Dictionary of {column name pattern: SQL type}
     """
     return {
-        # 基础字段
+        # Basic fields
         'id': 'SERIAL PRIMARY KEY',
         'name': 'TEXT',
         'code': 'TEXT',
@@ -223,7 +208,7 @@ def get_standard_column_types() -> Dict[str, str]:
         'state': 'TEXT',
         'postcode': 'TEXT',
         
-        # 时间字段
+        # Time fields
         'year': 'INTEGER',
         'month': 'INTEGER',
         'start_year': 'INTEGER',
@@ -231,7 +216,7 @@ def get_standard_column_types() -> Dict[str, str]:
         'date': 'DATE',
         'timestamp': 'TIMESTAMP',
         
-        # 数值字段
+        # Numeric fields
         'capacity_mw': 'NUMERIC',
         'production_gj': 'NUMERIC',
         'production_mwh': 'NUMERIC',
@@ -242,12 +227,12 @@ def get_standard_column_types() -> Dict[str, str]:
         'count': 'INTEGER',
         'population': 'INTEGER',
         
-        # 布尔字段
+        # Boolean fields
         'connected': 'BOOLEAN',
         'active': 'BOOLEAN',
         'enabled': 'BOOLEAN',
         
-        # 地理字段
+        # Geographic fields
         'lat': 'NUMERIC',
         'lon': 'NUMERIC',
         'latitude': 'NUMERIC',
@@ -259,32 +244,29 @@ def get_standard_column_types() -> Dict[str, str]:
         'formatted_address': 'TEXT',
         'place_id': 'TEXT',
         
-        # 默认文本类型
+        # Default text type
         'default': 'TEXT'
     }
 
-
 def infer_column_type(column_name: str, sample_values: List = None) -> str:
     """
-    推断列的SQL类型
-    
+    Infer SQL type for a column
     Args:
-        column_name: 规范化后的列名
-        sample_values: 样本值列表（可选）
-        
+        column_name: Normalized column name
+        sample_values: Sample value list (optional)
     Returns:
-        推断的SQL类型
+        Inferred SQL type
     """
     standard_types = get_standard_column_types()
     
-    # 精确匹配
+    # Exact match
     if column_name in standard_types:
         return standard_types[column_name]
     
-    # 模式匹配
+    # Pattern matching
     col_lower = column_name.lower()
     
-    # 数值类型
+    # Numeric types
     if any(pattern in col_lower for pattern in ['capacity', 'mw', 'gj', 'mwh', 'tco2e', 'emissions', 'production']):
         return 'NUMERIC'
     
@@ -297,34 +279,32 @@ def infer_column_type(column_name: str, sample_values: List = None) -> str:
     if any(pattern in col_lower for pattern in ['count', 'number', 'population', 'total']):
         return 'INTEGER'
     
-    # 时间类型
+    # Time types
     if any(pattern in col_lower for pattern in ['year', 'month', 'day']):
         return 'INTEGER'
     
     if any(pattern in col_lower for pattern in ['date', 'time']):
         return 'DATE'
     
-    # 布尔类型
+    # Boolean types
     if any(pattern in col_lower for pattern in ['connected', 'active', 'enabled', 'grid']):
         return 'BOOLEAN'
     
-    # 地理类型
+    # Geographic types
     if any(pattern in col_lower for pattern in ['lat', 'lon', 'latitude', 'longitude', 'bbox']):
         return 'NUMERIC'
     
-    # 默认文本类型
+    # Default text type
     return 'TEXT'
-
 
 def print_column_mapping_report(original_columns: List[str], normalized_columns: List[str]):
     """
-    打印列名规范化报告（基于等长的原始/规范化列名列表）
-    
+    Print column name normalization report (based on equal-length original/normalized column name lists)
     Args:
-        original_columns: 原始列名列表
-        normalized_columns: 位置对齐的规范化列名列表
+        original_columns: Original column name list
+        normalized_columns: Position-aligned normalized column name list
     """
-    print(f"📋 列名规范化报告: {len(original_columns)} 个列")
+    print(f"📋 Column name normalization report: {len(original_columns)} columns")
     
     changes = []
     unchanged = []
@@ -336,32 +316,29 @@ def print_column_mapping_report(original_columns: List[str], normalized_columns:
             unchanged.append(orig_col)
     
     if changes:
-        print(f"  ✓ {len(changes)} 个列名已规范化:")
-        for orig, norm in changes[:10]:  # 只显示前10个
+        print(f"  ✓ {len(changes)} column names normalized:")
+        for orig, norm in changes[:10]:  # Only show first 10
             print(f"    - {orig} → {norm}")
         if len(changes) > 10:
-            print(f"    ... 还有 {len(changes) - 10} 个列名变化")
+            print(f"    ... {len(changes) - 10} more column name changes")
     
     if unchanged:
-        print(f"  ✓ {len(unchanged)} 个列名无需更改")
+        print(f"  ✓ {len(unchanged)} column names unchanged")
     
     print()
 
-
 # =============================================================================
-# ABS数据清理功能 (原 abs_data_cleaner.py)
+# ABS Data Cleaning Functions (originally abs_data_cleaner.py)
 # =============================================================================
 
 def detect_numeric_columns(df: pd.DataFrame, start_col: int = 3) -> Dict[str, str]:
     """
-    检测数值列类型并返回列名到类型的映射
-    
+    Detect numeric column types and return column name to type mapping
     Args:
         df: DataFrame
-        start_col: 从第几列开始检测（前面通常是Code/Label/Year）
-        
+        start_col: Starting column index for detection (usually Code/Label/Year columns are before this)
     Returns:
-        dict: {列名: 数据类型} 其中类型为 'integer', 'float', 'percentage', 'currency', 'text'
+        dict: {column name: data type} where types are 'integer', 'float', 'percentage', 'currency', 'text'
     """
     column_types = {}
     
@@ -369,36 +346,36 @@ def detect_numeric_columns(df: pd.DataFrame, start_col: int = 3) -> Dict[str, st
         if col in ['standardized_state', 'lga_code_clean', 'lga_name_clean']:
             continue
             
-        # 采样前100个非空值进行类型判断
+        # Sample first 100 non-null values for type determination
         sample_values = df[col].dropna().head(100)
         if sample_values.empty:
             column_types[col] = 'text'
             continue
             
-        # 转为字符串并清理
+        # Convert to string and clean
         str_values = [str(v).strip() for v in sample_values if not is_missing_value(v)]
         if not str_values:
             column_types[col] = 'text'
             continue
             
-        # 分析模式
+        # Analyze patterns
         numeric_count = 0
         percentage_count = 0
         currency_count = 0
         
-        for val in str_values[:50]:  # 只看前50个有效值
-            # 百分比检测
+        for val in str_values[:50]:  # Only check first 50 valid values
+            # Percentage detection
             if '%' in val or 'percent' in val.lower():
                 percentage_count += 1
                 continue
                 
-            # 货币检测
+            # Currency detection
             if any(symbol in val for symbol in ['$', '€', '£', '¥', 'AUD', 'USD']):
                 currency_count += 1
                 continue
                 
-            # 数值检测（包含千分位逗号）
-            clean_val = re.sub(r'[,\s]', '', val)  # 移除逗号和空格
+            # Numeric detection (including thousand separators)
+            clean_val = re.sub(r'[,\s]', '', val)  # Remove commas and spaces
             try:
                 if '.' in clean_val:
                     float(clean_val)
@@ -412,13 +389,13 @@ def detect_numeric_columns(df: pd.DataFrame, start_col: int = 3) -> Dict[str, st
         total_checked = len(str_values[:50])
         numeric_ratio = numeric_count / total_checked if total_checked > 0 else 0
         
-        # 类型判断
+        # Type determination
         if percentage_count > total_checked * 0.3:
             column_types[col] = 'percentage'
         elif currency_count > total_checked * 0.3:
             column_types[col] = 'currency'
         elif numeric_ratio > 0.7:
-            # 进一步判断整数还是浮点数
+            # Further determine if integer or float
             has_decimal = any('.' in re.sub(r'[,\s]', '', str(v)) for v in str_values[:20] if str(v).strip())
             column_types[col] = 'float' if has_decimal else 'integer'
         else:
@@ -426,17 +403,14 @@ def detect_numeric_columns(df: pd.DataFrame, start_col: int = 3) -> Dict[str, st
     
     return column_types
 
-
 def clean_numeric_value(value: Any, target_type: str = 'float') -> Optional[float]:
     """
-    通用数值清理和转换函数
-    
+    General numeric value cleaning and conversion function
     Args:
-        value: 原始值
-        target_type: 目标类型 ('integer', 'float', 'percentage', 'currency', 'capacity')
-        
+        value: Original value
+        target_type: Target type ('integer', 'float', 'percentage', 'currency', 'capacity') 
     Returns:
-        转换后的数值或None
+        Converted numeric value or None
     """
     if pd.isna(value):
         return None
@@ -447,114 +421,114 @@ def clean_numeric_value(value: Any, target_type: str = 'float') -> Optional[floa
     str_val = str(value).strip()
     
     try:
-        # 处理百分比
+        # Handle percentage
         if target_type == 'percentage':
-            # 移除%符号，转换为小数
+            # Remove % symbol, convert to decimal
             clean_val = re.sub(r'[%\s]', '', str_val)
-            clean_val = re.sub(r'[,]', '', clean_val)  # 移除千分位
+            clean_val = re.sub(r'[,]', '', clean_val)  # Remove thousand separators
             return float(clean_val) / 100.0
         
-        # 处理货币
+        # Handle currency
         elif target_type == 'currency':
-            # 移除货币符号和千分位
+            # Remove currency symbols and thousand separators
             clean_val = re.sub(r'[$€£¥,\s]|AUD|USD|EUR|GBP', '', str_val, flags=re.IGNORECASE)
             return float(clean_val)
         
-        # 处理容量（移除单位标识）
+        # Handle capacity (remove unit identifiers)
         elif target_type == 'capacity':
-            # 移除千分位逗号、空格和单位标识（如MW, mw等）
+            # Remove thousand separators, spaces and unit identifiers (like MW, mw, etc.)
             clean_val = re.sub(r'[,\s]', '', str_val)
             clean_val = re.sub(r'[a-zA-Z]+', '', clean_val)
             return float(clean_val)
         
-        # 处理普通数值
+        # Handle regular numeric values
         else:
-            # 移除千分位逗号和多余空格
+            # Remove thousand separators and extra spaces
             clean_val = re.sub(r'[,\s]', '', str_val)
             if target_type == 'integer':
-                return float(int(float(clean_val)))  # 先转float再转int避免小数点问题
+                return float(int(float(clean_val)))  # Convert to float first then int to avoid decimal issues
             else:  # float
                 return float(clean_val)
                 
     except (ValueError, TypeError):
         return None
 
-
-
-
-def process_abs_data_with_cleaning(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
+def process_data_with_numeric_cleaning(df: pd.DataFrame, data_type: str = 'abs') -> Tuple[pd.DataFrame, Dict[str, str]]:
     """
-    处理ABS数据，包括数值转换
-    
+    General data processing function including numeric conversion
     Args:
-        df: 原始DataFrame
-        
+        df: Original DataFrame
+        data_type: Data type ('abs', 'cer', 'nger')
     Returns:
-        (处理后的DataFrame, 列类型映射)
+        (Processed DataFrame, column type mapping)
     """
-    print("  🔍检测ABS数值列类型...")
+    print(f"  🔍 Detecting {data_type.upper()} numeric column types...")
     
-    # 1. 检测数值列类型
+    # 1. Detect numeric column types
     column_types = detect_numeric_columns(df)
     numeric_cols = {k: v for k, v in column_types.items() if v != 'text'}
     
     if numeric_cols:
-        print(f"  ✓检测到{len(numeric_cols)}个数值列: {list(numeric_cols.keys())}")
-        for col, col_type in list(numeric_cols.items())[:5]:  # 只显示前5个
+        print(f"  ✓ Detected {len(numeric_cols)} numeric columns: {list(numeric_cols.keys())}")
+        for col, col_type in list(numeric_cols.items())[:5]:
             print(f"    - {col}: {col_type}")
         if len(numeric_cols) > 5:
-            print(f"    ... 还有{len(numeric_cols)-5}个数值列")
+            print(f"    ... {len(numeric_cols)-5} more numeric columns")
     
-    # 2. 转换数值列
-    print("  🔢转换数值列...")
+    # 2. Convert numeric columns
+    print("  🔢 Converting numeric columns...")
     df_processed = df.copy()
     converted_count = 0
     for col, col_type in column_types.items():
         if col_type != 'text' and col in df_processed.columns:
-            # 创建新的数值列
             numeric_col = f"{col}_numeric"
             df_processed[numeric_col] = df_processed[col].apply(
                 lambda x: clean_numeric_value(x, col_type)
             )
             
-            # 统计成功转换的数量
             success_count = df_processed[numeric_col].notna().sum()
             if success_count > 0:
                 converted_count += success_count
-                # 将原列替换为数值列
                 df_processed[col] = df_processed[numeric_col]
                 df_processed.drop(columns=[numeric_col], inplace=True)
     
     if converted_count > 0:
-        print(f"  ✓数值转换完成: {converted_count}个值成功转换")
+        print(f"  ✓ Numeric conversion completed: {converted_count} values successfully converted")
     else:
-        print("  ⚠️未发现需要转换的数值")
+        print("  ⚠️ No values found that need conversion")
     
     return df_processed, column_types
 
+def process_abs_data_with_cleaning(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """
+    Convenience function for processing ABS data
+    Args:
+        df: Original DataFrame
+    Returns:
+        (Processed DataFrame, column type mapping)
+    """
+    return process_data_with_numeric_cleaning(df, 'abs')
 
 # =============================================================================
-# 通用辅助函数
+# General Helper Functions
 # =============================================================================
 
 def standardize_fuel_type(value: Any) -> Optional[str]:
     """
-    通用燃料类型标准化函数
-    
+    General fuel type standardization function
     Args:
-        value: 原始燃料类型值
-        
+        value: Original fuel type value
     Returns:
-        标准化后的燃料类型名称
+        Standardized fuel type name
     """
     if is_missing_value(value):
         return None
     
     val_str = str(value).strip().lower()
     
-    # 统一的燃料类型映射
+    # Unified fuel type mapping
     fuel_mapping = {
-        # 可再生能源
+        # Renewable energy
         'solar': 'Solar',
         'wind': 'Wind',
         'hydro': 'Hydro',
@@ -563,7 +537,7 @@ def standardize_fuel_type(value: Any) -> Optional[str]:
         'bagasse': 'Bagasse',
         'wood': 'Biomass',
         
-        # 化石燃料
+        # Fossil fuels
         'coal': 'Coal',
         'black coal': 'Black Coal',
         'brown coal': 'Brown Coal',
@@ -571,53 +545,50 @@ def standardize_fuel_type(value: Any) -> Optional[str]:
         'natural gas': 'Natural Gas',
         'diesel': 'Diesel',
         
-        # 特殊燃料
+        # Special fuels
         'coal seam methane': 'Coal Seam Gas',
         'coal seam gas': 'Coal Seam Gas',
         'waste coal mine gas': 'Coal Mine Gas',
         'coal mine gas': 'Coal Mine Gas',
         'landfill gas': 'Landfill Gas',
         
-        # 储能
+        # Energy storage
         'battery': 'Battery Storage',
         'battery storage': 'Battery Storage',
     }
     
-    # 直接匹配
+    # Direct match
     if val_str in fuel_mapping:
         return fuel_mapping[val_str]
     
-    # 部分匹配
+    # Partial match
     for key, value in fuel_mapping.items():
         if key in val_str:
             return value
     
-    # 默认返回首字母大写的格式
+    # Default return title case format
     return str(value).strip().title()
-
 
 def clean_facility_name(value: Any, name_type: str = 'facility') -> Optional[str]:
     """
-    通用设施/电站名称清理函数
-    
+    General facility/power station name cleaning function
     Args:
-        value: 原始名称值
-        name_type: 名称类型 ('facility', 'station', 'project')
-        
+        value: Original name value
+        name_type: Name type ('facility', 'station', 'project')
     Returns:
-        清理后的名称
+        Cleaned name
     """
     if is_missing_value(value):
         return None
     
     name = str(value).strip()
     
-    # 跳过特殊的汇总行
+    # Skip special summary rows
     if name.lower() in ['corporate total', 'facility', 'total', 'summary']:
         return name
     
     if name_type == 'station':
-        # CER电站名称特殊处理：移除冗余的描述性后缀
+        # CER power station name special handling: remove redundant descriptive suffixes
         patterns_to_remove = [
             r'\s*-\s*(Solar|Wind|Gas|Hydro|Battery)\s*(w\s*SGU)?\s*-\s*[A-Z]{2,3}$',
             r'\s*-\s*(Solar|Wind|Gas|Hydro|Battery)$',
@@ -628,126 +599,118 @@ def clean_facility_name(value: Any, name_type: str = 'facility') -> Optional[str
         for pattern in patterns_to_remove:
             name = re.sub(pattern, '', name, flags=re.IGNORECASE)
     
-    # 通用清理
-    # 标准化分隔符
+    # General cleaning
+    # Standardize separators
     name = re.sub(r'\s*-\s*', ' - ', name)
     name = re.sub(r'\s*,\s*', ', ', name)
     
-    # 标准化括号格式
+    # Standardize bracket format
     name = re.sub(r'\s*\(\s*([^)]+)\s*\)\s*', r' (\1)', name)
     
-    # 清理多余空格
+    # Clean extra spaces
     name = re.sub(r'\s+', ' ', name).strip()
     
     return name
 
-
 # =============================================================================
-# CER数据清理功能 (原 cer_data_cleaner.py)
+# CER Data Cleaning Functions (originally cer_data_cleaner.py)
 # =============================================================================
 
 def normalize_cer_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """
-    规范化CER数据的列名
-    
+    Normalize CER data column names
     Args:
-        df: 原始DataFrame
-        
+        df: Original DataFrame
     Returns:
-        列名规范化后的DataFrame
+        DataFrame with normalized column names
     """
     df_normalized = df.copy()
     
-    # 列名映射规则
+    # Column name mapping rules
     column_mappings = {
-        # 基础信息列
+        # Basic information columns
         'accreditation code': 'accreditation_code',
         'power station name': 'power_station_name',
         'project name': 'project_name',
-        'state ': 'state',  # 处理尾部空格
+        'state ': 'state',  # Handle trailing spaces
         'state': 'state',
         'postcode': 'postcode',
         
-        # 容量相关
+        # Capacity related
         'installed capacity (mw)': 'installed_capacity_mw',
         'mw capacity': 'mw_capacity',
         
-        # 燃料类型
+        # Fuel type
         'fuel source (s)': 'fuel_source',
+        'fuel source(s)': 'fuel_source',  # Handle no-space variant
+        'fuel sources': 'fuel_source',    # Plural variant seen on some pages
         'fuel source': 'fuel_source',
         
-        # 日期相关
+        # Date related
         'accreditation start date': 'accreditation_start_date',
         'approval date': 'approval_date',
         'committed date (month/year)': 'committed_date',
     }
     
-    # 创建新的列名映射
+    # Create new column name mapping
     new_columns = {}
     for col in df.columns:
-        # 清理列名：去除首尾空格，转小写
+        # Clean column name: remove leading/trailing spaces, convert to lowercase
         clean_col = str(col).strip().lower()
         
-        # 查找映射
+        # Find mapping
         if clean_col in column_mappings:
             new_columns[col] = column_mappings[clean_col]
         else:
-            # 默认规范化：空格转下划线，去除特殊字符
-            normalized = re.sub(r'[^\w\s]', '', clean_col)  # 去除特殊字符
-            normalized = re.sub(r'\s+', '_', normalized)    # 空格转下划线
-            normalized = re.sub(r'_+', '_', normalized)     # 多个下划线合并
-            normalized = normalized.strip('_')              # 去除首尾下划线
+            # Default normalization: spaces to underscores, remove special characters
+            normalized = re.sub(r'[^\w\s]', '', clean_col)  # Remove special characters
+            normalized = re.sub(r'\s+', '_', normalized)    # Spaces to underscores
+            normalized = re.sub(r'_+', '_', normalized)     # Merge multiple underscores
+            normalized = normalized.strip('_')              # Remove leading/trailing underscores
             new_columns[col] = normalized
     
-    # 重命名列
+    # Rename columns
     df_normalized = df_normalized.rename(columns=new_columns)
     
-    print(f"  ✓CER列名规范化完成: {len(new_columns)}个列")
+    print(f"  ✓ CER column name normalization completed: {len(new_columns)} columns")
     
-    # 显示主要的列名变化
-    important_changes = []
-    for old_col, new_col in new_columns.items():
-        if old_col != new_col and any(key in old_col.lower() for key in ['state', 'power', 'capacity', 'fuel']):
-            important_changes.append(f"{old_col} → {new_col}")
+    # Show major column name changes
+    important_changes = [f"{old_col} → {new_col}" for old_col, new_col in new_columns.items() 
+                        if old_col != new_col and any(key in old_col.lower() for key in ['state', 'power', 'capacity', 'fuel'])]
     
     if important_changes:
-        print("  主要列名变化:")
-        for change in important_changes[:5]:  # 只显示前5个
+        print("  Major column name changes:")
+        for change in important_changes[:5]:
             print(f"    - {change}")
     
     return df_normalized
 
-
 def process_cer_time_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    处理CER数据的时间列，将MMM-YYYY格式拆分为year和month列
-    
+    Process CER data time columns, split MMM-YYYY format into year and month columns
     Args:
         df: DataFrame
-        
     Returns:
-        添加了year和month列的DataFrame
+        DataFrame with added year and month columns
     """
     df_processed = df.copy()
     
-    # 使用通用月份映射
+    # Use general month mapping
     month_abbr_to_num = MONTH_ABBR_TO_NUM
     
-    # 查找包含日期的列
-    date_columns = []
-    for col in df_processed.columns:
-        if any(keyword in col.lower() for keyword in ['date', 'committed']):
-            date_columns.append(col)
+    # Find columns containing dates
+    date_columns = [col for col in df_processed.columns 
+                   if any(keyword in col.lower() for keyword in ['date', 'committed'])]
     
     processed_count = 0
     
     for date_col in date_columns:
-        # 创建year和month列
+        # Create year and month columns
         year_col = f"{date_col}_year"
         month_col = f"{date_col}_month"
         
         def parse_mmm_yyyy(date_str):
-            """解析MMM-YYYY格式的日期"""
+            """Parse MMM-YYYY format dates"""
             if pd.isna(date_str) or not date_str:
                 return None, None
             
@@ -759,12 +722,12 @@ def process_cer_time_columns(df: pd.DataFrame) -> pd.DataFrame:
                         month_abbr = parts[0].strip()
                         year_str = parts[1].strip()
                         
-                        # 转换月份
+                        # Convert month
                         month_num = month_abbr_to_num.get(month_abbr)
                         if month_num is None:
                             return None, None
                         
-                        # 转换年份
+                        # Convert year
                         try:
                             year_num = int(year_str)
                             return year_num, month_num
@@ -774,189 +737,173 @@ def process_cer_time_columns(df: pd.DataFrame) -> pd.DataFrame:
             except Exception:
                 return None, None
         
-        # 应用解析函数
+        # Apply parsing function
         parsed_dates = df_processed[date_col].apply(parse_mmm_yyyy)
         
-        # 拆分年份和月份
+        # Split years and months
         years = [item[0] if item[0] is not None else None for item in parsed_dates]
         months = [item[1] if item[1] is not None else None for item in parsed_dates]
         
         df_processed[year_col] = years
         df_processed[month_col] = months
         
-        # 统计成功转换的数量
+        # Count successful conversions
         success_count = sum(1 for y, m in zip(years, months) if y is not None and m is not None)
         if success_count > 0:
             processed_count += success_count
-            print(f"  ✓时间列处理: {date_col} → {year_col}, {month_col} ({success_count}条记录)")
+            print(f"  ✓ Time column processing: {date_col} → {year_col}, {month_col} ({success_count} records)")
     
     if processed_count == 0:
-        print("  ⚠️未找到需要处理的时间列")
+        print("  ⚠️ No time columns found that need processing")
     else:
-        print(f"  ✓CER时间处理完成: 共处理{processed_count}条时间记录")
+        print(f"  ✓ CER time processing completed: {processed_count} time records processed")
     
     return df_processed
 
-
 def convert_cer_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    转换CER数据中的数值列
-    
+    Convert numeric columns in CER data
     Args:
         df: DataFrame
-        
     Returns:
-        数值列转换后的DataFrame
+        DataFrame with converted numeric columns
     """
     df_processed = df.copy()
     
-    # 识别需要转换的数值列（容量相关）
-    capacity_columns = []
-    for col in df_processed.columns:
-        col_lower = col.lower()
-        if any(keyword in col_lower for keyword in ['capacity', 'mw', 'installed']):
-            capacity_columns.append(col)
+    # Identify numeric columns that need conversion (capacity related)
+    capacity_columns = [col for col in df_processed.columns 
+                       if any(keyword in col.lower() for keyword in ['capacity', 'mw', 'installed'])]
     
     if not capacity_columns:
-        print("  ⚠️未找到需要转换的容量列")
+        print("  ⚠️ No capacity columns found that need conversion")
         return df_processed
-    
     
     converted_count = 0
     
     for col in capacity_columns:
-        # 转换数值（使用通用函数）
+        # Convert numeric values (using general function)
         original_values = df_processed[col].copy()
         df_processed[col] = df_processed[col].apply(lambda x: clean_numeric_value(x, 'capacity'))
         
-        # 统计成功转换的数量
+        # Count successful conversions
         success_count = df_processed[col].notna().sum()
         original_count = original_values.notna().sum()
         
         if success_count > 0:
             converted_count += success_count
-            print(f"  ✓数值转换: {col} ({success_count}/{original_count}条记录)")
+            print(f"  ✓ Numeric conversion: {col} ({success_count}/{original_count} records)")
     
     if converted_count > 0:
-        print(f"  ✓CER数值转换完成: 共转换{converted_count}个数值")
+        print(f"  ✓ CER numeric conversion completed: {converted_count} values converted")
     else:
-        print("  ⚠️未成功转换任何数值")
+        print("  ⚠️ No values successfully converted")
     
     return df_processed
-
 
 def process_cer_data_with_cleaning(df: pd.DataFrame, table_type: str) -> pd.DataFrame:
     """
-    处理CER数据，包括列名规范化、时间处理和数值转换
-    
+    Process CER data including column name normalization, time processing and numeric conversion
     Args:
-        df: 原始DataFrame
-        table_type: 表类型（如 "approved_power_stations"）
-        
+        df: Original DataFrame
+        table_type: Table type (e.g., "approved_power_stations")
     Returns:
-        处理后的DataFrame
+        Processed DataFrame
     """
-    print(f"  🧹开始CER数据清理: {table_type}")
+    print(f"  🧹 Starting CER data cleaning: {table_type}")
     
-    # 1. 列名规范化
-    print("  📝规范化列名...")
+    # 1. Column name normalization
+    print("  📝 Normalizing column names...")
     df_processed = normalize_cer_column_names(df)
     
-    # 2. 时间处理
-    print("  🕐处理时间列...")
+    # 2. Time processing
+    print("  🕐 Processing time columns...")
     df_processed = process_cer_time_columns(df_processed)
     
-    # 3. 数值转换
-    print("  🔢转换数值列...")
+    # 3. Numeric conversion
+    print("  🔢 Converting numeric columns...")
     df_processed = convert_cer_numeric_columns(df_processed)
     
-    print(f"  ✓CER数据清理完成: {table_type} ({df_processed.shape})")
+    print(f"  ✓ CER data cleaning completed: {table_type} ({df_processed.shape})")
     
     return df_processed
 
-
 # =============================================================================
-# 数据质量修复功能 (原 data_quality_fixer.py)
+# Data Quality Repair Functions (originally data_quality_fixer.py)
 # =============================================================================
 
 def fix_missing_values(df: pd.DataFrame, missing_indicators: List[str] = None) -> pd.DataFrame:
     """
-    统一处理缺失值标识
-    
+    Unified handling of missing value indicators
     Args:
-        df: 原始DataFrame
-        missing_indicators: 缺失值标识列表
-        
+        df: Original DataFrame
+        missing_indicators: List of missing value indicators
     Returns:
-        修复后的DataFrame
+        Repaired DataFrame
     """
     if missing_indicators is None:
         missing_indicators = MISSING_VALUE_INDICATORS
     
     df_fixed = df.copy()
     
-    # 统计修复情况
+    # Count repair statistics
     fix_count = 0
     
     for col in df_fixed.columns:
-        if df_fixed[col].dtype == 'object':  # 只处理文本列
+        if df_fixed[col].dtype == 'object':  # Only process text columns
             for indicator in missing_indicators:
-                # 精确匹配缺失值标识
+                # Exact match missing value indicators
                 mask = df_fixed[col].astype(str).str.strip() == indicator
                 count = mask.sum()
                 if count > 0:
                     df_fixed.loc[mask, col] = None
                     fix_count += count
     
-    print(f"  ✓缺失值修复: 共修复 {fix_count} 个缺失值标识")
+    print(f"  ✓ Missing value repair: {fix_count} missing value indicators repaired")
     return df_fixed
-
 
 def parse_date_flexible(date_str: str) -> Optional[Tuple[int, int, int]]:
     """
-    灵活解析多种日期格式
-    
+    Flexible parsing of multiple date formats
     Args:
-        date_str: 日期字符串
-        
+        date_str: Date string
     Returns:
-        (year, month, day) 元组，如果解析失败返回None
+        (year, month, day) tuple, returns None if parsing fails
     """
     if not date_str or pd.isna(date_str):
         return None
     
     date_str = str(date_str).strip()
     
-    # 使用通用月份映射
+    # Use general month mapping
     month_abbr = MONTH_ABBR_TO_NUM
     
     try:
-        # 格式1: DD/MM/YYYY
+        # Format 1: DD/MM/YYYY
         if '/' in date_str:
             parts = date_str.split('/')
             if len(parts) == 3:
                 day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
                 return (year, month, day)
         
-        # 格式2: MMM-YYYY
+        # Format 2: MMM-YYYY
         elif '-' in date_str and len(date_str.split('-')) == 2:
             parts = date_str.split('-')
             month_str, year_str = parts[0].strip().lower(), parts[1].strip()
             if month_str in month_abbr:
                 year, month = int(year_str), month_abbr[month_str]
-                return (year, month, 1)  # 默认为月初
+                return (year, month, 1)  # Default to beginning of month
         
-        # 格式3: YYYY-MM-DD
+        # Format 3: YYYY-MM-DD
         elif '-' in date_str and len(date_str.split('-')) == 3:
             parts = date_str.split('-')
-            if len(parts[0]) == 4:  # 年份在前
+            if len(parts[0]) == 4:  # Year first
                 year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
                 return (year, month, day)
         
-        # 格式4: DD-MM-YYYY
+        # Format 4: DD-MM-YYYY
         elif '-' in date_str and len(date_str.split('-')) == 3:
             parts = date_str.split('-')
-            if len(parts[2]) == 4:  # 年份在后
+            if len(parts[2]) == 4:  # Year last
                 day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
                 return (year, month, day)
     
@@ -965,22 +912,19 @@ def parse_date_flexible(date_str: str) -> Optional[Tuple[int, int, int]]:
     
     return None
 
-
 def fix_date_formats(df: pd.DataFrame) -> pd.DataFrame:
     """
-    修复多种日期格式
-    
+    Fix multiple date formats
     Args:
-        df: 数据DataFrame
-        
+        df: Data DataFrame
     Returns:
-        修复后的DataFrame
+        Repaired DataFrame
     """
     df_fixed = df.copy()
     
-    print("  📅修复日期格式...")
+    print("  📅 Fixing date formats...")
     
-    # 查找所有日期列
+    # Find all date columns
     date_columns = [col for col in df_fixed.columns if 'date' in col.lower()]
     
     total_fixed = 0
@@ -989,9 +933,9 @@ def fix_date_formats(df: pd.DataFrame) -> pd.DataFrame:
         if date_col not in df_fixed.columns:
             continue
             
-        print(f"    处理日期列: {date_col}")
+        print(f"    Processing date column: {date_col}")
         
-        # 创建标准化的日期列
+        # Create standardized date columns
         year_col = f"{date_col}_year_fixed"
         month_col = f"{date_col}_month_fixed"
         day_col = f"{date_col}_day_fixed"
@@ -1009,7 +953,7 @@ def fix_date_formats(df: pd.DataFrame) -> pd.DataFrame:
                 months.append(month)
                 days.append(day)
                 
-                # 生成ISO格式日期
+                # Generate ISO format date
                 try:
                     iso_date = f"{year:04d}-{month:02d}-{day:02d}"
                     iso_dates.append(iso_date)
@@ -1022,147 +966,102 @@ def fix_date_formats(df: pd.DataFrame) -> pd.DataFrame:
                 days.append(None)
                 iso_dates.append(None)
         
-        # 添加新列
+        # Add new columns
         df_fixed[year_col] = years
         df_fixed[month_col] = months
         df_fixed[day_col] = days
         df_fixed[iso_col] = iso_dates
         
         total_fixed += success_count
-        print(f"      ✓成功解析 {success_count}/{len(df_fixed)} 个日期")
+        print(f"      ✓ Successfully parsed {success_count}/{len(df_fixed)} dates")
     
     if total_fixed > 0:
-        print(f"  ✓日期格式修复完成: 共修复 {total_fixed} 个日期值")
+        print(f"  ✓ Date format repair completed: {total_fixed} date values repaired")
     else:
-        print(f"  ⚠️未找到需要修复的日期列")
+        print(f"  ⚠️ No date columns found that need repair")
     
     return df_fixed
 
-
-def fix_nger_specific_issues(df: pd.DataFrame) -> pd.DataFrame:
+def fix_specific_data_issues(df: pd.DataFrame, data_type: str, **kwargs) -> pd.DataFrame:
     """
-    修复NGER数据特有的问题
-    
+    Fix specific issues for particular data types
     Args:
-        df: NGER数据DataFrame
-        
+        df: Data DataFrame
+        data_type: Data type ('nger', 'cer')
+        **kwargs: Additional parameters
     Returns:
-        修复后的DataFrame
+        Repaired DataFrame
     """
     df_fixed = df.copy()
+    print(f"  🔧 Fixing {data_type.upper()} specific issues...")
     
-    print("  🔧修复NGER特有问题...")
-    
-    # 1. 统一缺失值处理
+    # 1. Unified missing value handling
     df_fixed = fix_missing_values(df_fixed)
     
-    # 2. 标准化布尔字段
-    if 'gridconnected' in df_fixed.columns:
-        def standardize_grid_connected(value):
-            if pd.isna(value) or value is None:
+    if data_type.lower() == 'nger':
+        # Standardize boolean fields
+        if 'gridconnected' in df_fixed.columns:
+            def standardize_grid_connected(value):
+                if pd.isna(value) or value is None:
+                    return None
+                val_str = str(value).strip().lower()
+                if val_str in ['on', 'connected', 'yes', 'true', '1']:
+                    return 'Connected'
+                elif val_str in ['off', 'disconnected', 'no', 'false', '0']:
+                    return 'Disconnected'
                 return None
             
-            val_str = str(value).strip().lower()
-            if val_str in ['on', 'connected', 'yes', 'true', '1']:
-                return 'Connected'
-            elif val_str in ['off', 'disconnected', 'no', 'false', '0']:
-                return 'Disconnected'
-            else:
-                return None
+            original_count = df_fixed['gridconnected'].notna().sum()
+            df_fixed['gridconnected'] = df_fixed['gridconnected'].apply(standardize_grid_connected)
+            fixed_count = df_fixed['gridconnected'].notna().sum()
+            print(f"    - gridconnected field standardization: {original_count} → {fixed_count}")
         
-        original_count = df_fixed['gridconnected'].notna().sum()
-        df_fixed['gridconnected'] = df_fixed['gridconnected'].apply(standardize_grid_connected)
-        fixed_count = df_fixed['gridconnected'].notna().sum()
-        print(f"    - gridconnected字段标准化: {original_count} → {fixed_count}")
+        # Standardize fuel types and facility names
+        if 'primaryfuel' in df_fixed.columns:
+            df_fixed['primaryfuel'] = df_fixed['primaryfuel'].apply(standardize_fuel_type)
+            print(f"    - primaryfuel field standardization completed")
+        
+        if 'facilityname' in df_fixed.columns:
+            df_fixed['facilityname'] = df_fixed['facilityname'].apply(lambda x: clean_facility_name(x, 'facility'))
+            print(f"    - facilityname field cleaning completed")
     
-    # 3. 标准化燃料类型
-    if 'primaryfuel' in df_fixed.columns:
-        df_fixed['primaryfuel'] = df_fixed['primaryfuel'].apply(standardize_fuel_type)
-        print(f"    - primaryfuel字段标准化完成")
-    
-    # 4. 清理设施名称
-    if 'facilityname' in df_fixed.columns:
-        df_fixed['facilityname'] = df_fixed['facilityname'].apply(lambda x: clean_facility_name(x, 'facility'))
-        print(f"    - facilityname字段清理完成")
+    elif data_type.lower() == 'cer':
+        table_type = kwargs.get('table_type', 'unknown')
+        
+        # Skip adding *_fixed and *_iso date columns for CER as requested
+        
+        # Clean power station/project names
+        name_columns = [col for col in ['power_station_name', 'Power station name', 'project_name', 'Project Name'] 
+                       if col in df_fixed.columns]
+        
+        for name_col in name_columns:
+            df_fixed[name_col] = df_fixed[name_col].apply(lambda x: clean_facility_name(x, 'station'))
+            print(f"    - {name_col} field cleaning completed")
+        
+        # Standardize fuel types
+        fuel_columns = [col for col in ['fuel_source', 'Fuel Source', 'Fuel Source (s)'] 
+                       if col in df_fixed.columns]
+        
+        for fuel_col in fuel_columns:
+            df_fixed[fuel_col] = df_fixed[fuel_col].apply(standardize_fuel_type)
+            print(f"    - {fuel_col} field standardization completed")
     
     return df_fixed
-
-
-def fix_cer_specific_issues(df: pd.DataFrame, table_type: str) -> pd.DataFrame:
-    """
-    修复CER数据特有的问题
-    
-    Args:
-        df: CER数据DataFrame
-        table_type: 表类型
-        
-    Returns:
-        修复后的DataFrame
-    """
-    df_fixed = df.copy()
-    
-    print(f"  🔧修复CER特有问题: {table_type}...")
-    
-    # 1. 统一缺失值处理
-    df_fixed = fix_missing_values(df_fixed)
-    
-    # 2. 修复日期格式
-    df_fixed = fix_date_formats(df_fixed)
-    
-    # 3. 清理电站/项目名称
-    name_columns = []
-    if 'power_station_name' in df_fixed.columns:
-        name_columns.append('power_station_name')
-    elif 'Power station name' in df_fixed.columns:
-        name_columns.append('Power station name')
-    if 'project_name' in df_fixed.columns:
-        name_columns.append('project_name')
-    elif 'Project Name' in df_fixed.columns:
-        name_columns.append('Project Name')
-    
-    for name_col in name_columns:
-        df_fixed[name_col] = df_fixed[name_col].apply(lambda x: clean_facility_name(x, 'station'))
-        print(f"    - {name_col}字段清理完成")
-    
-    # 4. 标准化燃料类型
-    fuel_columns = []
-    if 'fuel_source' in df_fixed.columns:
-        fuel_columns.append('fuel_source')
-    elif 'Fuel Source' in df_fixed.columns:
-        fuel_columns.append('Fuel Source')
-    elif 'Fuel Source (s)' in df_fixed.columns:
-        fuel_columns.append('Fuel Source (s)')
-    
-    for fuel_col in fuel_columns:
-        df_fixed[fuel_col] = df_fixed[fuel_col].apply(standardize_fuel_type)
-        print(f"    - {fuel_col}字段标准化完成")
-    
-    return df_fixed
-
 
 def process_data_quality_fixes(df: pd.DataFrame, data_type: str, **kwargs) -> pd.DataFrame:
     """
-    统一的数据质量修复入口函数
-    
+    Unified data quality repair entry function
     Args:
-        df: 原始DataFrame
-        data_type: 数据类型 ('nger', 'cer', 'abs')
-        **kwargs: 额外参数
-        
+        df: Original DataFrame
+        data_type: Data type ('nger', 'cer', 'abs')
+        **kwargs: Additional parameters
     Returns:
-        修复后的DataFrame
+        Repaired DataFrame
     """
-    print(f"  🔧开始数据质量修复: {data_type.upper()}")
+    print(f"  🔧 Starting data quality repair: {data_type.upper()}")
     
-    if data_type.lower() == 'nger':
-        return fix_nger_specific_issues(df)
-    elif data_type.lower() == 'cer':
-        table_type = kwargs.get('table_type', 'unknown')
-        return fix_cer_specific_issues(df, table_type)
-    elif data_type.lower() == 'abs':
-        # ABS数据修复可以在这里添加
-        return fix_missing_values(df)
+    if data_type.lower() in ['nger', 'cer']:
+        return fix_specific_data_issues(df, data_type, **kwargs)
     else:
-        # 默认只处理缺失值
+        # ABS data or other types only handle missing values
         return fix_missing_values(df)
-
