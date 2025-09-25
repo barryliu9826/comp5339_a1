@@ -12,7 +12,8 @@ import pandas as pd
 
 # 本地模块导入
 from excel_utils import get_merged_cells, read_merged_headers
-from state_standardizer import standardize_dataframe_states
+from state_standardizer import standardize_dataframe_states, standardize_state_name
+from data_cleaner import *
 
 
 DB_CONFIG = {
@@ -187,42 +188,46 @@ def create_table_safe(cursor, table_name: str, create_sql: str) -> bool:
         return False
 
 def create_nger_table_impl(cursor):
-    """创建NGER表的实现"""
-    create_sql = """
-    CREATE TABLE nger_unified (
-        id SERIAL PRIMARY KEY,
-        year_label TEXT,
-        start_year INTEGER,
-        stop_year INTEGER,
-        facilityname TEXT,
-        state TEXT,
-        facility_type TEXT,
-        primaryfuel TEXT,
-        reportingentity TEXT,
-        controllingcorporation TEXT,
-        electricity_production_gj NUMERIC,
-        electricity_production_mwh NUMERIC,
-        emission_intensity_tco2e_mwh NUMERIC,
-        scope1_emissions_tco2e NUMERIC,
-        scope2_emissions_tco2e NUMERIC,
-        total_emissions_tco2e NUMERIC,
-        grid_info TEXT,
-        grid_connected BOOLEAN,
-        important_notes TEXT,
-        lat NUMERIC,
-        lon NUMERIC,
-        formatted_address TEXT,
-        place_id TEXT,
-        postcode TEXT,
-        bbox_south NUMERIC,
-        bbox_north NUMERIC,
-        bbox_west NUMERIC,
-        bbox_east NUMERIC
-    );
-    """
+    """创建NGER表的实现（使用规范化列名）"""
+    
+    # 定义NGER表的列结构
+    column_definitions = {
+        'year_label': 'TEXT',
+        'start_year': 'INTEGER', 
+        'stop_year': 'INTEGER',
+        'facility_name': 'TEXT',
+        'state': 'TEXT',
+        'facility_type': 'TEXT',
+        'primary_fuel': 'TEXT',
+        'reporting_entity': 'TEXT',
+        'controlling_corporation': 'TEXT',
+        'electricity_production_gj': 'NUMERIC',
+        'electricity_production_mwh': 'NUMERIC',
+        'emission_intensity_tco2e_mwh': 'NUMERIC',
+        'scope1_emissions_tco2e': 'NUMERIC',
+        'scope2_emissions_tco2e': 'NUMERIC',
+        'total_emissions_tco2e': 'NUMERIC',
+        'grid_info': 'TEXT',
+        'grid_connected': 'BOOLEAN',
+        'important_notes': 'TEXT',
+        'lat': 'NUMERIC',
+        'lon': 'NUMERIC',
+        'formatted_address': 'TEXT',
+        'place_id': 'TEXT',
+        'postcode': 'TEXT',
+        'bbox_south': 'NUMERIC',
+        'bbox_north': 'NUMERIC',
+        'bbox_west': 'NUMERIC',
+        'bbox_east': 'NUMERIC'
+    }
+    
+    create_sql = create_table_sql_with_normalized_columns('nger_unified', column_definitions)
     ok = create_table_safe(cursor, 'nger_unified', create_sql)
     if not ok:
         return False
+    
+    print(f"✓NGER表创建完成（规范化列名）")
+    
     # 确保geometry列
     try:
         ensure_geometry_column_and_index(cursor, 'nger_unified', 'lat', 'lon', 'geom')
@@ -244,15 +249,48 @@ def create_nger_table(conn) -> bool:
         return False
 
 def create_cer_tables_impl(cursor):
-    """创建CER表的实现"""
+    """创建CER表的实现（使用规范化列名）"""
+    
     cer_table_types = ['approved_power_stations', 'committed_power_stations', 'probable_power_stations']
     
     for table_type in cer_table_types:
-        clean_table = clean_name(f"cer_{table_type}")
-        create_sql = f"CREATE TABLE {clean_table} (id SERIAL PRIMARY KEY);"
+        # 基础列结构
+        column_definitions = {
+            'accreditation_code': 'TEXT',
+            'power_station_name': 'TEXT',
+            'project_name': 'TEXT', 
+            'state': 'TEXT',
+            'postcode': 'TEXT',
+            'installed_capacity_mw': 'NUMERIC',
+            'mw_capacity': 'NUMERIC',
+            'fuel_source': 'TEXT',
+            'accreditation_start_date': 'TEXT',
+            'approval_date': 'TEXT',
+            'committed_date': 'TEXT',
+            'committed_date_year': 'INTEGER',
+            'committed_date_month': 'INTEGER',
+            'accreditation_start_date_year': 'INTEGER',
+            'accreditation_start_date_month': 'INTEGER',
+            'approval_date_year': 'INTEGER',
+            'approval_date_month': 'INTEGER',
+            # 地理编码字段
+            'lat': 'NUMERIC',
+            'lon': 'NUMERIC',
+            'formatted_address': 'TEXT',
+            'place_id': 'TEXT',
+            'bbox_south': 'NUMERIC',
+            'bbox_north': 'NUMERIC',
+            'bbox_west': 'NUMERIC',
+            'bbox_east': 'NUMERIC'
+        }
         
-        if not create_table_safe(cursor, clean_table, create_sql):
+        normalized_table_name = normalize_db_column_name(f"cer_{table_type}")
+        create_sql = create_table_sql_with_normalized_columns(normalized_table_name, column_definitions)
+        
+        if not create_table_safe(cursor, normalized_table_name, create_sql):
             return False
+        
+        print(f"✓CER表创建完成（规范化列名）: {normalized_table_name}")
     
     return True
 
@@ -292,31 +330,75 @@ def create_all_abs_tables(conn, file_path: str) -> bool:
                 
                 for cell in merged_cells:
                     start_col, end_col = cell['start_col'] - 1, cell['end_col']
-                    selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col:end_col])
+                    # 安全列范围（防止越界）
+                    total_cols = len(df.columns)
+                    if total_cols < 3:
+                        print(f"✗跳过: 列不足3列，无法构建基础列 Code/Label/Year -> {cell['value']}")
+                        continue
+                    start_col_safe = max(0, min(start_col, total_cols))
+                    end_col_safe = max(start_col_safe, min(end_col, total_cols))
+                    if start_col_safe >= end_col_safe:
+                        print(f"✗跳过: 无效列范围 [{start_col},{end_col}) -> [{start_col_safe},{end_col_safe}) : {cell['value']}")
+                        continue
+                    selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col_safe:end_col_safe])
                     
                     # 创建表
                     try:
-                        clean_table = clean_name(cell['value'])
+                        clean_table = normalize_db_column_name(cell['value'])
                         
-                        # 构建创建表的SQL
-                        create_sql = f"CREATE TABLE {clean_table} (id SERIAL PRIMARY KEY, code TEXT, label TEXT, year INTEGER, geographic_level INTEGER, standardized_state TEXT"
+                        # 使用规范化列名和类型检测创建表
                         
-                        used = {'id', 'code', 'label', 'year', 'geographic_level', 'standardized_state'}
-                        for col in selected_cols[3:]:
-                            clean_col = clean_name(col)
-                            original = clean_col
-                            counter = 1
-                            while clean_col in used:
-                                clean_col = f"{original}_{counter}"
-                                counter += 1
-                            used.add(clean_col)
-                            create_sql += f", {clean_col} TEXT"
+                        # 检测列类型（基于这个子集的数据）
+                        # 基于安全范围提取子集
+                        idx_slice = [0, 1, 2] + list(range(start_col_safe, end_col_safe))
+                        subset_df = df.iloc[:, idx_slice]
+                        subset_df.columns = selected_cols
+                        column_types = detect_numeric_columns(subset_df)
                         
-                        create_sql += ");"
+                        # 创建列名规范化列表（与 selected_cols 等长、顺序对齐）
+                        normalized_cols = normalize_column_mapping(selected_cols)
                         
-                        if not create_table_safe(cursor, clean_table, create_sql):
+                        # 构建列定义字典
+                        column_definitions = {
+                            'code': 'TEXT',
+                            'label': 'TEXT', 
+                            'year': 'INTEGER',
+                            'geographic_level': 'INTEGER',
+                            'standardized_state': 'TEXT',
+                            'lga_code_clean': 'TEXT',
+                            'lga_name_clean': 'TEXT'
+                        }
+                        
+                        # 添加数据列
+                        for col, normalized_col in zip(selected_cols[3:], normalized_cols[3:]):  # 跳过Code, Label, Year
+                            
+                            # 根据检测到的类型设置SQL类型
+                            col_type = column_types.get(col, 'text')
+                            if col_type in ['integer']:
+                                sql_type = 'INTEGER'
+                            elif col_type in ['float', 'percentage', 'currency']:
+                                sql_type = 'NUMERIC'
+                            else:
+                                sql_type = 'TEXT'
+                            
+                            column_definitions[normalized_col] = sql_type
+                        
+                        # 创建表（为ABS表添加前缀）
+                        normalized_table_name = normalize_db_column_name(f"abs_{cell['value']}")  # 使用统一函数
+                        create_sql = create_table_sql_with_normalized_columns(
+                            normalized_table_name, 
+                            column_definitions
+                        )
+                        
+                        if not create_table_safe(cursor, normalized_table_name, create_sql):
                             print(f"✗ABS表创建失败: {cell['value']}")
                             return False
+                        else:
+                            # 报告列名规范化和类型检测结果
+                            print_column_mapping_report(selected_cols, normalized_cols)
+                            numeric_cols = {k: v for k, v in column_types.items() if v != 'text'}
+                            if numeric_cols:
+                                print(f"  📊{cell['value']}: 检测到{len(numeric_cols)}个数值列")
                     except Exception as e:
                         print(f"✗ABS表创建失败: {cell['value']} - {e}")
                         return False
@@ -337,24 +419,6 @@ def create_all_abs_tables(conn, file_path: str) -> bool:
         return False
 
 
-def clean_name(name: str, idx: int = 0) -> str:
-    """统一名称清理"""
-    if not name or str(name).strip() == '':
-        return f"col_{idx + 1}"
-    
-    clean = str(name).strip().lower()
-    # 替换特殊字符
-    replacements = {' ': '_', '-': '_', '(': '', ')': '', '%': 'percent', 
-                   ':': '', ',': '', '\n': '_', '\r': '_', '__': '_'}
-    for old, new in replacements.items():
-        clean = clean.replace(old, new)
-    
-    # 只保留字母数字和下划线
-    clean = ''.join(c for c in clean if c.isalnum() or c == '_')
-    # 如果以数字开头，添加前缀
-    if clean and clean[0].isdigit():
-        clean = f"col_{clean}"
-    return clean[:50]
 
 
 
@@ -379,14 +443,26 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
         print(f"  📍标准化NGER州名...")
         standardize_dataframe_states(df, 'state')
         
+        # 使用规范化的列名映射
         mappings = {
-            'facility_type': ['type'], 'electricity_production_gj': ['electricityproductiongj'],
+            'facility_type': ['type'],
+            'electricity_production_gj': ['electricityproductiongj'],
             'electricity_production_mwh': ['electricityproductionmwh'],
             'emission_intensity_tco2e_mwh': ['emissionintensitytco2emwh', 'emissionintensitytmwh'],
             'scope1_emissions_tco2e': ['scope1tco2e', 'totalscope1emissionstco2e'],
             'scope2_emissions_tco2e': ['scope2tco2e', 'totalscope2emissionstco2e', 'totalscope2emissionstco2e2'],
-            'total_emissions_tco2e': ['totalemissionstco2e'], 'grid_info': ['grid'],
-            'grid_connected': ['gridconnected', 'gridconnected2'], 'important_notes': ['importantnotes']
+            'total_emissions_tco2e': ['totalemissionstco2e'],
+            'grid_info': ['grid'],
+            'grid_connected': ['gridconnected', 'gridconnected2'],
+            'important_notes': ['importantnotes']
+        }
+        
+        # 规范化原始列名到数据库列名的映射
+        column_name_mapping = {
+            'facilityname': 'facility_name',
+            'primaryfuel': 'primary_fuel',
+            'reportingentity': 'reporting_entity',
+            'controllingcorporation': 'controlling_corporation'
         }
         
         # 确保地理编码列存在（即使表已存在）
@@ -448,8 +524,9 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
             row_data.append(start_year)
             row_data.append(stop_year)
             
-            # 基础列
-            for col in ['facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation']:
+            # 基础列（使用规范化的列名）
+            basic_columns = ['facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation']
+            for col in basic_columns:
                 value = row.get(col) if col in df.columns else None
                 has_value = (value is not None) and (not pd.isna(value)) and (str(value).strip() != '') and (str(value).strip().lower() not in {'nan', 'none', '-'})
                 row_data.append(str(value).strip() if has_value else None)
@@ -487,7 +564,8 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
                     row_data.append(str(value) if value is not None and not pd.isna(value) and str(value).strip() else None)
             data.append(tuple(row_data))
         
-        cols = ['year_label', 'start_year', 'stop_year', 'facilityname', 'state', 'primaryfuel', 'reportingentity', 'controllingcorporation',
+        # 使用规范化的列名
+        cols = ['year_label', 'start_year', 'stop_year', 'facility_name', 'state', 'primary_fuel', 'reporting_entity', 'controlling_corporation',
                 'facility_type', 'electricity_production_gj', 'electricity_production_mwh',
                 'emission_intensity_tco2e_mwh', 'scope1_emissions_tco2e', 'scope2_emissions_tco2e',
                 'total_emissions_tco2e', 'grid_info', 'grid_connected', 'important_notes'] + list(geocode_fields.keys())
@@ -514,10 +592,10 @@ def save_nger_data(conn, year_label: str, df: pd.DataFrame) -> bool:
         return False
 
 def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
-    """保存CER数据（表已存在，动态添加列）"""
+    """保存CER数据（使用规范化列名，表已存在）"""
     try:
         cursor = conn.cursor()
-        clean_table = clean_name(f"cer_{table_type}")
+        normalized_table_name = normalize_db_column_name(f"cer_{table_type}")
         
         # 标准化州名
         print(f"  📍标准化CER州名...")
@@ -542,7 +620,7 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
         used_names = {'id'}
         clean_original_cols = []
         for col in original_cols:
-            clean_col = clean_name(col)
+            clean_col = normalize_db_column_name(col)
             # 避免与地理编码字段冲突
             if clean_col in ['postcode', 'state_full', 'country', 'locality']:
                 clean_col = f"original_{clean_col}"
@@ -567,7 +645,7 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
                         AND table_name = %s 
                         AND column_name = %s
                     );
-                """, (clean_table, col_name))
+                """, (normalized_table_name, col_name))
                 column_exists = cursor.fetchone()[0]
                 
                 if not column_exists:
@@ -578,7 +656,7 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
                         col_type = 'TEXT'  # 默认为TEXT类型
                     
                     # 添加列
-                    alter_sql = f"ALTER TABLE {clean_table} ADD COLUMN {col_name} {col_type}"
+                    alter_sql = f"ALTER TABLE {normalized_table_name} ADD COLUMN {col_name} {col_type}"
                     cursor.execute(alter_sql)
                     print(f"  ✓添加列: {col_name} ({col_type})")
             except Exception as e:
@@ -609,19 +687,19 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
             data.append(tuple(row_data))
         
         # 插入
-        insert_sql = prepare_insert_sql(clean_table, all_columns)
+        insert_sql = prepare_insert_sql(normalized_table_name, all_columns)
         batch_insert(cursor, insert_sql, data)
         
         # 为CER表创建/更新geom列
         try:
-            ensure_geometry_column_and_index(cursor, clean_table, 'lat', 'lon', 'geom')
-            ensure_area_and_bbox_geometries(cursor, clean_table,
+            ensure_geometry_column_and_index(cursor, normalized_table_name, 'lat', 'lon', 'geom')
+            ensure_area_and_bbox_geometries(cursor, normalized_table_name,
                                             'bbox_west', 'bbox_south', 'bbox_east', 'bbox_north')
         except Exception as e:
             print(f"  ⚠更新CER几何列失败: {e}")
 
         conn.commit()
-        print(f"  ✓CER数据入库成功: {clean_table} ({len(data)}行，含地理编码)")
+        print(f"  ✓CER数据入库成功: {normalized_table_name} ({len(data)}行，含地理编码)")
         return True
         
     except Exception as e:
@@ -631,36 +709,47 @@ def save_cer_data(conn, table_type: str, df: pd.DataFrame) -> bool:
 
 def create_abs_table(conn, merged_cell_value: str, columns: List[str]) -> str:
     """创建ABS表（表已存在，只返回表名）"""
-    clean_table = clean_name(merged_cell_value)
+    clean_table = normalize_db_column_name(f"abs_{merged_cell_value}")
     print(f"✓ABS表已存在: {clean_table}")
     return clean_table
 
+def create_abs_table_with_types(conn, merged_cell_value: str, columns: List[str], column_types: dict) -> str:
+    """创建ABS表（基于预检测的列类型，表已在预创建阶段存在）"""
+    clean_table = normalize_db_column_name(f"abs_{merged_cell_value}")
+    print(f"✓ABS表已存在（带类型）: {clean_table}")
+    return clean_table
+
 def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = None) -> bool:
-    """插入ABS数据"""
+    """插入ABS数据（包含数值转换和LGA标准化）"""
     try:
         cursor = conn.cursor()
         
-        # 标准化ABS数据中的州名（在Label列中）
+        # 使用新的ABS数据清理工具
+        
+        print(f"  🧹开始ABS数据清理...")
+        
+        # 标准化州名
         print(f"  📍标准化ABS州名...")
         if 'Label' in df.columns:
-            # 对于ABS数据，我们需要将Label列中的州名标准化
-            # 但保留原始Label，添加一个新的standardized_state列
-            from state_standardizer import standardize_state_name
             df['standardized_state'] = df['Label'].apply(standardize_state_name)
         
+        # 执行数值转换和LGA标准化
+        df_cleaned, column_types = process_abs_data_with_cleaning(df)
+        
+        # 准备列名映射
         cols = ['code', 'label', 'year', 'geographic_level']
         used = set(cols)
         
-        # 添加standardized_state列（如果存在）
-        if 'standardized_state' in df.columns:
+        # 添加标准化列
+        if 'standardized_state' in df_cleaned.columns:
             cols.append('standardized_state')
             used.add('standardized_state')
         
-        for col in df.columns[3:]:
-            # Skip standardized_state as it's handled separately above
+        # 处理数据列
+        for col in df_cleaned.columns[3:]:
             if col == 'standardized_state':
                 continue
-            clean_col = clean_name(col)
+            clean_col = normalize_db_column_name(col)
             original = clean_col
             counter = 1
             while clean_col in used:
@@ -669,12 +758,14 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
             used.add(clean_col)
             cols.append(clean_col)
         
+        # 准备插入数据
         data = []
-        for _, row in df.iterrows():
+        for _, row in df_cleaned.iterrows():
             row_data = []
-            # 前3列
+            
+            # 前3列：Code, Label, Year
             for i in range(3):
-                value = row[df.columns[i]]
+                value = row[df_cleaned.columns[i]]
                 if pd.isna(value):
                     row_data.append(None)
                 else:
@@ -682,9 +773,9 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
                     lower_val = str_val.lower()
                     if str_val == '-' or str_val == '' or lower_val in {'nan', 'none', 'null'}:
                         row_data.append(None)
-                    elif i == 0 and len(str_val) > 50:
+                    elif i == 0 and len(str_val) > 50:  # Code列截断
                         row_data.append(str_val[:50])
-                    elif i == 2:
+                    elif i == 2:  # Year列转整数
                         try:
                             row_data.append(int(float(str_val)))
                         except:
@@ -695,19 +786,26 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
             # 添加geographic_level
             row_data.append(geo_level if geo_level is not None else -1)
             
-            # 添加standardized_state列（如果存在）
-            if 'standardized_state' in df.columns:
-                row_data.append(row.get('standardized_state'))
+            # 添加标准化列
+            if 'standardized_state' in df_cleaned.columns:
+                value = row.get('standardized_state')
+                row_data.append(value if value is not None and not pd.isna(value) else None)
             
-            # 其他列
-            for col in df.columns[3:]:
-                # Skip standardized_state as it's handled separately above
+            # 处理数据列（已经过数值转换）
+            for col in df_cleaned.columns[3:]:
                 if col == 'standardized_state':
                     continue
+                    
                 value = row[col]
-                if pd.isna(value):
+                
+                # 对于已转换的数值列，直接使用数值
+                col_type = column_types.get(col, 'text')
+                if col_type != 'text' and not pd.isna(value):
+                    row_data.append(value)  # 数值已经转换过
+                elif pd.isna(value):
                     row_data.append(None)
                 else:
+                    # 文本列的处理
                     str_val = str(value).strip()
                     lower_val = str_val.lower()
                     if str_val == '-' or str_val == '' or lower_val in {'nan', 'none', 'null'}:
@@ -721,11 +819,165 @@ def insert_abs_data(conn, table_name: str, df: pd.DataFrame, geo_level: int = No
         batch_insert(cursor, insert_sql, data, 10000)
         
         conn.commit()
+        
+        # 统计报告
+        numeric_cols = {k: v for k, v in column_types.items() if v != 'text'}
         print(f"✓ABS数据插入成功: {len(data)}行")
+        if numeric_cols:
+            print(f"  📊包含{len(numeric_cols)}个数值列")
+        
         return True
         
     except Exception as e:
         print(f"✗ABS数据插入失败: {e}")
+        conn.rollback()
+        return False
+
+def insert_abs_data_cleaned(conn, table_name: str, df: pd.DataFrame, geo_level: int = None, column_types: dict = None) -> bool:
+    """插入已清理的ABS数据（数据已在入库前完成清理）"""
+    try:
+        cursor = conn.cursor()
+        
+        print(f"  💾插入已清理的ABS数据到: {table_name}")
+        
+        # 准备列名映射（数据已经包含标准化列）
+        cols = ['code', 'label', 'year', 'geographic_level']
+        used = set(cols)
+        
+        # 添加标准化列
+        for std_col in ['standardized_state', 'lga_code_clean', 'lga_name_clean']:
+            if std_col in df.columns:
+                cols.append(std_col)
+                used.add(std_col)
+        
+        # 处理数据列，并建立 原列 -> 规范化列 的映射（保持顺序与唯一性）
+        original_to_clean = {}
+        for col in df.columns[3:]:
+            if col in ['standardized_state', 'lga_code_clean', 'lga_name_clean']:
+                continue
+            clean_col = normalize_db_column_name(col)
+            original = clean_col
+            counter = 1
+            while clean_col in used:
+                clean_col = f"{original}_{counter}"
+                counter += 1
+            used.add(clean_col)
+            cols.append(clean_col)
+            original_to_clean[col] = clean_col
+
+        # 在插入前，确保所有列在目标表中已经存在（防止列名映射不一致导致的缺列错误）
+        try:
+            for clean_col in cols:
+                # 检查列是否已存在
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                          AND table_name = %s 
+                          AND column_name = %s
+                    );
+                    """,
+                    (table_name, clean_col)
+                )
+                if not bool(cursor.fetchone()[0]):
+                    # 推断列类型：优先使用传入的 column_types（基于原列名），否则根据列名猜测
+                    sql_type = 'TEXT'
+                    if clean_col in ['code', 'label', 'standardized_state', 'lga_code_clean', 'lga_name_clean']:
+                        sql_type = 'TEXT'
+                    elif clean_col in ['year', 'geographic_level']:
+                        sql_type = 'INTEGER'
+                    else:
+                        # 反查原列名以获得类型提示
+                        source_col = None
+                        for orig, mapped in original_to_clean.items():
+                            if mapped == clean_col:
+                                source_col = orig
+                                break
+                        if column_types and source_col and source_col in column_types:
+                            ct = column_types[source_col]
+                            if ct in ['integer']:
+                                sql_type = 'INTEGER'
+                            elif ct in ['float', 'percentage', 'currency']:
+                                sql_type = 'NUMERIC'
+                            else:
+                                sql_type = 'TEXT'
+                        else:
+                            # 基于列名启发推断
+                            lc = clean_col.lower()
+                            if any(k in lc for k in ['percent', 'rate', 'ratio']):
+                                sql_type = 'NUMERIC'
+                            elif any(k in lc for k in ['count', 'number', 'total']):
+                                sql_type = 'INTEGER'
+                            else:
+                                sql_type = 'TEXT'
+                    try:
+                        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {clean_col} {sql_type}")
+                        print(f"  ✓添加ABS列: {table_name}.{clean_col} ({sql_type})")
+                    except Exception as ee:
+                        print(f"  ⚠添加ABS列失败: {table_name}.{clean_col} - {ee}")
+        except Exception as ee:
+            print(f"  ⚠ABS列校验/补充失败: {ee}")
+        
+        # 准备插入数据（数据已经清理过）
+        data = []
+        for _, row in df.iterrows():
+            row_data = []
+            
+            # 前3列：Code, Label, Year
+            for i in range(3):
+                value = row[df.columns[i]]
+                if pd.isna(value):
+                    row_data.append(None)
+                else:
+                    str_val = str(value).strip()
+                    if str_val in ['-', '', 'nan', 'none', 'null'] or str_val.lower() in ['nan', 'none', 'null']:
+                        row_data.append(None)
+                    elif i == 0 and len(str_val) > 50:  # Code列截断
+                        row_data.append(str_val[:50])
+                    elif i == 2:  # Year列转整数
+                        try:
+                            row_data.append(int(float(str_val)))
+                        except:
+                            row_data.append(None)
+                    else:
+                        row_data.append(str_val)
+            
+            # 添加geographic_level
+            row_data.append(geo_level if geo_level is not None else -1)
+            
+            # 添加标准化列
+            for std_col in ['standardized_state', 'lga_code_clean', 'lga_name_clean']:
+                if std_col in df.columns:
+                    value = row.get(std_col)
+                    row_data.append(value if value is not None and not pd.isna(value) else None)
+            
+            # 处理数据列（已经清理过，直接使用）
+            for col in df.columns[3:]:
+                if col in ['standardized_state', 'lga_code_clean', 'lga_name_clean']:
+                    continue
+                    
+                value = row[col]
+                if pd.isna(value):
+                    row_data.append(None)
+                else:
+                    # 数据已经清理过，直接使用
+                    row_data.append(value)
+            
+            data.append(tuple(row_data))
+        
+        insert_sql = prepare_insert_sql(table_name, cols)
+        batch_insert(cursor, insert_sql, data, 10000)
+        
+        conn.commit()
+        
+        # 简化的统计报告
+        print(f"  ✓ABS数据入库成功: {len(data)}行（已预清理）")
+        
+        return True
+        
+    except Exception as e:
+        print(f"  ✗ABS数据入库失败: {e}")
         conn.rollback()
         return False
 

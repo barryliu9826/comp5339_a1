@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
-"""州名标准化工具"""
+"""State name standardization tool"""
 
-import re
 from typing import Dict, Optional, Union
 
-# 澳大利亚州名标准化映射表
+# Australian state name standardization mapping table
 STATE_MAPPING = {
-    # 英文缩写 (标准格式)
-    'NSW': 'NSW',
-    'VIC': 'VIC', 
-    'QLD': 'QLD',
-    'SA': 'SA',
-    'WA': 'WA',
-    'TAS': 'TAS',
-    'NT': 'NT',
-    'ACT': 'ACT',
-    
-    # 全名映射到缩写
+    # Full names mapped to abbreviations
     'New South Wales': 'NSW',
     'Victoria': 'VIC',
     'Queensland': 'QLD',
@@ -26,7 +15,7 @@ STATE_MAPPING = {
     'Northern Territory': 'NT',
     'Australian Capital Territory': 'ACT',
     
-    # ABS数字代码映射到缩写
+    # ABS numeric codes mapped to abbreviations
     '1': 'NSW',
     '2': 'VIC',
     '3': 'QLD',
@@ -37,7 +26,7 @@ STATE_MAPPING = {
     '8': 'ACT',
     '9': 'OT',  # Other Territories
     
-    # 其他可能的变体
+    # Other possible variants
     'New South Wales, Australia': 'NSW',
     'Victoria, Australia': 'VIC',
     'Queensland, Australia': 'QLD',
@@ -47,7 +36,7 @@ STATE_MAPPING = {
     'Northern Territory, Australia': 'NT',
     'Australian Capital Territory, Australia': 'ACT',
     
-    # 小写变体
+    # Lowercase variants
     'nsw': 'NSW',
     'vic': 'VIC',
     'qld': 'QLD',
@@ -57,7 +46,7 @@ STATE_MAPPING = {
     'nt': 'NT',
     'act': 'ACT',
     
-    # 无效值
+    # Invalid values
     '-': None,
     'N/A': None,
     'NA': None,
@@ -67,7 +56,7 @@ STATE_MAPPING = {
     None: None,
 }
 
-# 反向映射：从标准缩写到全名（用于显示）
+# Reverse mapping: from standard abbreviations to full names (for display)
 STATE_FULL_NAMES = {
     'NSW': 'New South Wales',
     'VIC': 'Victoria',
@@ -82,14 +71,11 @@ STATE_FULL_NAMES = {
 
 def standardize_state_name(state_input: Union[str, int, None]) -> Optional[str]:
     """
-    将各种格式的州名标准化为英文缩写格式
-    
+    Standardize various formats of state names to English abbreviations
     Args:
-        state_input: 输入的州名，可能是字符串、数字或None
-        
+        state_input: Input state name, can be string, number, or None
     Returns:
-        标准化的州名缩写，如果无法识别则返回None
-        
+        Standardized state name abbreviation, returns None if unrecognizable
     Examples:
         >>> standardize_state_name('New South Wales')
         'NSW'
@@ -103,80 +89,62 @@ def standardize_state_name(state_input: Union[str, int, None]) -> Optional[str]:
     if state_input is None:
         return None
     
-    # 转换为字符串并清理
+    # Convert to string and clean
     state_str = str(state_input).strip()
     
-    # 处理空字符串
+    # Handle empty strings
     if not state_str or state_str.lower() in {'', 'nan', 'none', 'null'}:
         return None
     
-    # 直接查找映射
+    # Direct mapping lookup
     if state_str in STATE_MAPPING:
         return STATE_MAPPING[state_str]
     
-    # 尝试大小写不敏感的查找
-    try:
-        state_lower = state_str.lower()
-        for key, value in STATE_MAPPING.items():
-            if key.lower() == state_lower:
-                return value
-    except AttributeError:
-        # 如果state_str不是字符串，直接返回None
-        return None
+    # Try case-insensitive lookup and partial matching
+    state_lower = state_str.lower()
+    for key, value in STATE_MAPPING.items():
+        if key.lower() == state_lower or (key.lower() in state_lower or state_lower in key.lower()):
+            return value
     
-    # 尝试部分匹配（处理可能包含额外信息的字符串）
-    try:
-        for key, value in STATE_MAPPING.items():
-            if key.lower() in state_lower or state_lower in key.lower():
-                return value
-    except AttributeError:
-        # 如果state_str不是字符串，直接返回None
-        return None
-    
-    # 如果都无法匹配，返回None
+    # If no match found, return None
     return None
 
 def get_state_full_name(state_abbrev: str) -> Optional[str]:
     """
-    获取州名缩写的全名
-    
+    Get the full name of a state abbreviation
     Args:
-        state_abbrev: 州名缩写
-        
+        state_abbrev: State name abbreviation
     Returns:
-        州名全名，如果无法找到则返回None
+        Full state name, returns None if not found
     """
     return STATE_FULL_NAMES.get(state_abbrev)
 
 def standardize_dataframe_states(df, state_column: str = 'state') -> None:
     """
-    标准化DataFrame中的州名列
-    
+    Standardize the state column in a DataFrame
     Args:
         df: pandas DataFrame
-        state_column: 州名列名
+        state_column: State column name
     """
     if state_column in df.columns:
         df[state_column] = df[state_column].apply(standardize_state_name)
 
 def get_state_statistics(df, state_column: str = 'state') -> Dict:
     """
-    获取州名统计信息
-    
+    Get state name statistics
     Args:
         df: pandas DataFrame
-        state_column: 州名列名
-        
+        state_column: State column name
     Returns:
-        包含州名统计信息的字典
+        Dictionary containing state name statistics
     """
     if state_column not in df.columns:
         return {'error': f'Column {state_column} not found'}
     
-    # 标准化州名
+    # Standardize state names
     standardized = df[state_column].apply(standardize_state_name)
     
-    # 统计
+    # Statistics
     stats = {
         'total_records': len(df),
         'valid_states': standardized.notna().sum(),
@@ -189,30 +157,25 @@ def get_state_statistics(df, state_column: str = 'state') -> Dict:
 
 def validate_state_data(df, state_column: str = 'state') -> Dict:
     """
-    验证州名数据的质量
-    
+    Validate the quality of state name data
     Args:
         df: pandas DataFrame
-        state_column: 州名列名
-        
+        state_column: State column name
     Returns:
-        验证结果字典
+        Validation result dictionary
     """
     if state_column not in df.columns:
         return {'valid': False, 'error': f'Column {state_column} not found'}
     
-    # 获取原始州名
+    # Get original state names
     original_states = df[state_column].dropna().unique()
     
-    # 标准化州名
+    # Standardize state names
     standardized = df[state_column].apply(standardize_state_name)
     valid_states = standardized.dropna().unique()
     
-    # 找出无法标准化的州名
-    invalid_states = []
-    for state in original_states:
-        if standardize_state_name(state) is None:
-            invalid_states.append(state)
+    # Find unstandardizable state names (avoid duplicate standardize_state_name calls)
+    invalid_states = [state for state in original_states if standardize_state_name(state) is None]
     
     validation_result = {
         'valid': len(invalid_states) == 0,

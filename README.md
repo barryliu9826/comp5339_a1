@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-这是一个综合性的数据获取和处理系统，用于自动下载、处理和存储澳大利亚的经济和能源数据。系统集成了三个主要数据源，并将所有数据统一存储到PostgreSQL数据库中。
+这是一个综合性的数据获取、处理和分析系统，用于自动下载、处理、存储和可视化澳大利亚的经济和能源数据。系统集成了三个主要数据源，将所有数据统一存储到PostgreSQL数据库中，并提供强大的数据清理和探索性数据分析(EDA)功能。
 
 ## 数据源
 
@@ -40,23 +40,31 @@ src/
 ├── geocoding.py                  # 地理编码与缓存 (658行)
 ├── excel_utils.py                # Excel处理工具 (55行)
 ├── state_standardizer.py         # 州名标准化工具 (227行)
-└── time_format_utils.py          # 时间格式处理工具 (154行)
+├── time_format_utils.py          # 时间格式处理工具 (154行)
+├── data_cleaner.py               # 统一数据清理模块 (1169行)
+└── eda_visualization.py          # 探索性数据分析可视化 (204行)
 
 data/
 ├── nger_data_api_links.csv       # NGER API链接
 ├── 14100DO0003_2011-24.xlsx     # ABS Excel数据
-└── geocoding_cache.json         # 地理编码持久化缓存
+├── geocoding_cache.json         # 地理编码持久化缓存
+└── eda/                          # EDA可视化输出目录
+    ├── abs_overview_geographic_level.png
+    ├── cer_map_categories.png
+    └── nger_map_by_fuel.png
 ```
 
 ### 技术栈
 
 - **Python 3.11+** (conda环境: comp5339)
-- **数据处理**: pandas>=2.2.0, openpyxl>=3.1.0, numpy>=1.26.0
-- **网络请求**: requests>=2.31.0
-- **网页爬虫**: selenium>=4.20.0 (Chrome WebDriver)
+- **数据处理**: pandas>=2.3.0, openpyxl>=3.1.0, numpy>=2.3.0
+- **数据可视化**: matplotlib>=3.9.0, seaborn>=0.13.2
+- **网络请求**: requests>=2.32.0
+- **网页爬虫**: selenium>=4.35.0 (Chrome WebDriver)
 - **数据库**: PostgreSQL (psycopg2-binary>=2.9.0)
 - **地理编码**: Nominatim API (通过requests)
 - **Excel处理**: openpyxl (合并单元格解析)
+- **类型提示**: typing-extensions>=4.0.0
 
 ## 数据库设计
 
@@ -170,6 +178,18 @@ python src/data_acquisition_processor.py
 python src/data_acquisition_processor.py
 ```
 
+### 运行EDA可视化分析
+
+```bash
+# 生成探索性数据分析图表
+python src/eda_visualization.py
+```
+
+这将生成以下可视化图表并保存到 `data/eda/` 目录：
+- **CER电站分布图** (`cer_map_categories.png`): 按类别显示已批准、已承诺和可能建设的电站位置
+- **NGER设施分布图** (`nger_map_by_fuel.png`): 按主要燃料类型显示NGER设施的地理分布
+- **ABS地理级别概览** (`abs_overview_geographic_level.png`): 显示ABS数据中州级和地方政府级数据的分布情况
+
 ### 数据查询示例
 
 ```sql
@@ -205,7 +225,8 @@ WHERE state = 'NSW';
 - **批量插入**: 10,000条记录为一批，优化大数据量处理
 - **数字编码**: 使用INTEGER类型替代TEXT，提升查询性能
 - **智能去重**: 自动处理重复列名和空列
- - **地理编码缓存**: 内存+文件双层缓存，避免重复调用，提高速度
+- **地理编码缓存**: 内存+文件双层缓存，避免重复调用，提高速度
+- **数据清理优化**: 统一的数据清理模块，提高数据处理效率
 
 ### 🛡️ 错误处理
 - **连接管理**: 自动重试和连接恢复
@@ -219,6 +240,7 @@ WHERE state = 'NSW';
 - **函数复用**: 统一的列名清理和数据处理逻辑
 - **类型安全**: 严格的类型注解和参数验证
 - **文档完善**: 详细的函数文档和使用说明
+- **数据可视化**: 专业的EDA可视化模块，支持多种图表类型
 
 ## 数据获取状态
 
@@ -231,6 +253,8 @@ WHERE state = 'NSW';
 - [x] 批量数据插入优化
 - [x] 连接共享和性能优化
 - [x] 代码模块化和精简
+- [x] 统一数据清理模块
+- [x] 探索性数据分析可视化
 
 ### 📊 数据统计
 - **NGER表**: 11张 (按年份: 2013-14 到 2023-24)
@@ -238,6 +262,7 @@ WHERE state = 'NSW';
 - **CER表**: 3张 (按电站类型: approved, committed, probable)
 - **总数据量**: 约60万+条记录
 - **地理编码缓存**: 自动缓存，避免重复API调用
+- **EDA可视化**: 3种专业图表类型，支持地理分布和统计分析
 
 ## 项目文件说明
 
@@ -279,10 +304,28 @@ WHERE state = 'NSW';
   - ABS时间数据格式统一
   - 多种时间格式的自动识别和转换
 
+- **`src/data_cleaner.py`** (1169行): 统一数据清理模块
+  - 综合数据清理和规范化功能
+  - 缺失值处理和数据类型转换
+  - 字符串清理和标准化
+  - 数据质量验证和修复
+  - 支持多种数据源的统一清理流程
+
+- **`src/eda_visualization.py`** (204行): 探索性数据分析可视化模块
+  - CER电站地理分布可视化
+  - NGER设施按燃料类型分布图
+  - ABS数据地理级别统计分析
+  - 专业的matplotlib和seaborn图表生成
+  - 自动保存高分辨率图表到指定目录
+
 ### 数据文件
 - **`data/nger_data_api_links.csv`**: NGER数据API链接
 - **`data/14100DO0003_2011-24.xlsx`**: ABS经济数据Excel文件
 - **`data/geocoding_cache.json`**: 地理编码持久化缓存文件
+- **`data/eda/`**: EDA可视化输出目录
+  - `abs_overview_geographic_level.png`: ABS地理级别分布图
+  - `cer_map_categories.png`: CER电站类别分布图
+  - `nger_map_by_fuel.png`: NGER设施燃料类型分布图
 
 ## 技术亮点
 
@@ -314,6 +357,18 @@ WHERE state = 'NSW';
 - 多线程环境下使用线程安全的全局缓存
 - 主流程结束时自动保存 `data/geocoding_cache.json`
 
+### 6. 数据清理与质量保证
+- `src/data_cleaner.py` 提供统一的数据清理和规范化功能
+- 支持多种数据源的清理流程
+- 自动处理缺失值、数据类型转换和字符串标准化
+- 数据质量验证和修复机制
+
+### 7. 探索性数据分析可视化
+- `src/eda_visualization.py` 提供专业的数据可视化功能
+- 支持地理分布图、统计图表等多种可视化类型
+- 使用matplotlib和seaborn生成高质量图表
+- 自动保存高分辨率图片到指定目录
+
 ## 开发历程
 
 ### 主要里程碑
@@ -323,6 +378,8 @@ WHERE state = 'NSW';
 4. **性能优化**: 批量插入和连接共享优化
 5. **代码重构**: 模块化和精简优化
 6. **业务优化**: 数字编码和表结构统一
+7. **数据清理**: 统一数据清理和质量保证模块
+8. **数据可视化**: 探索性数据分析和可视化功能
 
 ### 技术挑战解决
 - ✅ NGER数据下载循环问题修复
@@ -331,6 +388,8 @@ WHERE state = 'NSW';
 - ✅ PostgreSQL批量插入性能优化
 - ✅ 列名重复和特殊字符处理
 - ✅ 数据库连接管理和事务处理
+- ✅ 统一数据清理和质量保证机制
+- ✅ 专业数据可视化和图表生成
 
 ## 未来扩展
 
@@ -375,20 +434,26 @@ save_global_cache()
 ## 项目状态
 
 ### 当前版本特性
-- ✅ 完整的六模块架构 (数据获取、数据库、地理编码、Excel处理、州名标准化、时间格式处理)
+- ✅ 完整的八模块架构 (数据获取、数据库、地理编码、Excel处理、州名标准化、时间格式处理、数据清理、EDA可视化)
 - ✅ 多线程并发处理优化
 - ✅ 地理编码缓存系统
 - ✅ Excel合并单元格智能解析
 - ✅ 数据库连接池管理
 - ✅ 线程安全的操作设计
 - ✅ 州名标准化和时间格式统一处理
+- ✅ 统一数据清理和质量保证
+- ✅ 专业数据可视化和EDA分析
 
-### 最近更新 (2024年9月24日)
+### 最近更新 (2024年9月26日)
+- 🆕 新增 `data_cleaner.py` 模块 (1169行): 统一数据清理和质量保证模块
+- 🆕 新增 `eda_visualization.py` 模块 (204行): 探索性数据分析可视化模块
 - 🆕 新增 `state_standardizer.py` 模块 (227行): 澳大利亚州名标准化工具
 - 🆕 新增 `time_format_utils.py` 模块 (154行): 时间格式处理工具
-- 📝 扩展为六模块架构，增强数据处理能力
+- 📝 扩展为八模块架构，增强数据处理和可视化能力
 - 📝 更新了所有模块的文件行数统计
 - 📝 完善了模块功能说明和技术文档
+- 📝 更新了requirements.txt，包含数据可视化依赖
+- 📝 新增EDA可视化输出目录和图表说明
 
 ## 联系信息
 
@@ -398,4 +463,4 @@ save_global_cache()
 
 ---
 
-*最后更新: 2024年9月24日*
+*最后更新: 2024年9月26日*

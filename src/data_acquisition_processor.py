@@ -20,14 +20,11 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import StaleElementReferenceException
 
 # 本地模块导入
-from database_config import (
-    get_db_connection, return_db_connection, save_nger_data, save_cer_data, 
-    create_abs_table, insert_abs_data, close_connection_pool, get_connection_pool,
-    create_nger_table, create_cer_tables, create_all_abs_tables, DB_CONFIG
-)
+from database_config import *
 from geocoding import add_geocoding_to_cer_data, add_geocoding_to_nger_data, save_global_cache, initialize_geocoding_cache
 from excel_utils import get_merged_cells, read_merged_headers
 from time_format_utils import process_nger_time_format, process_cer_time_format, process_abs_time_format
+from data_cleaner import *
 
 # 配置
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -35,15 +32,6 @@ DATA_DIR.mkdir(exist_ok=True)
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "COMP5339-Assignment1/1.0"})
 
-def print_section(title: str, symbol: str = "="):
-    """打印分节标题"""
-    print(f"\n{symbol * 20} {title} {symbol * 20}")
-
-def print_result(operation: str, success: bool, details: str = ""):
-    """打印操作结果"""
-    symbol = "✓" if success else "✗"
-    print(f"{symbol}{operation}{f': {details}' if details else ''}")
-    return success
 
 # ============================================================================
 # 数据获取
@@ -70,11 +58,17 @@ def download_nger_year(year_data, results_queue):
             
             # 在线程中直接处理数据库操作
             try:
-                # 1. 先进行时间格式转换
+                # 1. 数据质量修复（入库前）
+                if df is not None and not df.empty:
+                    df_before = df.copy()
+                    df = process_data_quality_fixes(df, 'nger')
+                    print(f"  ✓NGER数据质量修复完成: {year_label}")
+                
+                # 2. 时间格式转换
                 if df is not None and not df.empty:
                     df = process_nger_time_format(df, year_label)
                     
-                # 2. 再进行地理编码增强
+                # 3. 地理编码增强
                 if df is not None and not df.empty:
                     df = add_geocoding_to_nger_data(df, max_workers=1)
             except Exception as e:
@@ -151,10 +145,10 @@ def fetch_abs_data():
         with open(filepath, 'wb') as f:
             for chunk in response.iter_content(8192):
                 if chunk: f.write(chunk)
-        print_result("ABS数据下载", True)
+        print("✓ABS数据下载成功")
         return filepath
     except Exception as e:
-        print_result("ABS数据下载", False, str(e))
+        print(f"✗ABS数据下载失败: {e}")
         return None
 
 # ============================================================================
@@ -312,8 +306,17 @@ def fetch_cer_data(max_workers=1):
                 df_result = scrape_paginated_table(driver, table, table_type)
                 if df_result.empty: continue
                 
-                print(f"  对CER数据进行时间格式转换...")
-                df_time_processed = process_cer_time_format(df_result, table_type)
+                # 数据清理：列名规范化、时间处理、数值转换（在地理编码前完成）
+                print(f"  🧹开始CER数据清理: {table_type}...")
+                
+                # 1. 基础数据清理（列名规范化、时间处理、数值转换）
+                df_cleaned = process_cer_data_with_cleaning(df_result, table_type)
+                
+                # 2. 数据质量修复（缺失值、日期格式统一）
+                df_fixed = process_data_quality_fixes(df_cleaned, 'cer', table_type=table_type)
+                
+                print(f"  ✓CER数据清理和修复完成: {table_type}")
+                df_time_processed = df_fixed
                 
                 print(f"  对CER数据进行多线程地理编码...")
                 df_geocoded = add_geocoding_to_cer_data(df_time_processed, table_type, max_workers)
@@ -342,9 +345,9 @@ def fetch_cer_data(max_workers=1):
 
 
 def process_abs_merged_cell_with_db(args):
-    """处理ABS单元格并入库"""
+    """处理ABS单元格并入库（数据已预清理）"""
     thread_id = threading.get_ident()
-    cell, df, level_info, db_config = args
+    cell, df_cleaned, level_info, db_config, column_types = args
     
     try:
         print(f"[线程{thread_id}] 处理ABS合并单元格: {cell['value']}")
@@ -354,11 +357,14 @@ def process_abs_merged_cell_with_db(args):
             return {'success': False, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': '数据库连接失败'}
         
         start_col, end_col = cell['start_col'] - 1, cell['end_col']
-        selected_cols = ['Code', 'Label', 'Year'] + list(df.columns[start_col:end_col])
-        subset_df = df[selected_cols].copy()
+        selected_cols = ['Code', 'Label', 'Year'] + list(df_cleaned.columns[start_col:end_col])
+        subset_df = df_cleaned[selected_cols].copy()
         
-        table_name = create_abs_table(conn, cell['value'], selected_cols)
-        if table_name and insert_abs_data(conn, table_name, subset_df, level_info['level']):
+        # 提取该子集相关的列类型信息
+        subset_column_types = {col: column_types.get(col, 'text') for col in selected_cols[3:]}
+        
+        table_name = create_abs_table_with_types(conn, cell['value'], selected_cols, subset_column_types)
+        if table_name and insert_abs_data_cleaned(conn, table_name, subset_df, level_info['level'], subset_column_types):
             print(f"✓[线程{thread_id}] ABS数据入库成功: {cell['value']}")
             return {'success': True, 'cell_name': cell['value'], 'thread_id': thread_id, 'error': None}
         else:
@@ -409,7 +415,17 @@ def process_abs_data(file_path: str, max_workers=4):
             # 处理ABS时间格式（验证）
             df = process_abs_time_format(df)
             
-            tasks = [(cell, df, level_info, DB_CONFIG) for cell in merged_cells]
+            # 数据清理：数值转换和LGA标准化（在入库前完成）
+            print(f"  🧹开始{sheet_name}数据清理...")
+            df_cleaned, column_types = process_abs_data_with_cleaning(df)
+            
+            # 统计清理结果
+            numeric_cols = {k: v for k, v in column_types.items() if v != 'text'}
+            if numeric_cols:
+                print(f"  📊{sheet_name}: 检测并转换了{len(numeric_cols)}个数值列")
+            print(f"  ✓{sheet_name}数据清理完成")
+            
+            tasks = [(cell, df_cleaned, level_info, DB_CONFIG, column_types) for cell in merged_cells]
             print(f"使用{max_workers}个线程并行处理ABS数据...")
             
             results = run_threading_tasks(tasks, process_abs_merged_cell_with_db, max_workers, f"ABS表格{sheet_name}")
@@ -493,41 +509,44 @@ def main():
     try:
         print("先创建数据表，再获取、处理数据...")
         
-        # 创建NGER表
-        print_section("1. 创建NGER表")
-        nger_table_ok = create_table_direct("NGER表", create_nger_table)
-        if not print_result("NGER表准备", nger_table_ok):
-            return
+        # # 创建NGER表
+        # print("\n" + "=" * 20 + " 1. 创建NGER表 " + "=" * 20)
+        # nger_table_ok = create_table_direct("NGER表", create_nger_table)
+        # if not nger_table_ok:
+        #     print("✗NGER表准备失败")
+        #     return
         
-        # NGER数据获取和处理
-        print_section("2. NGER数据获取和处理")
-        nger_ok = fetch_nger_data(max_workers=1)
+        # # NGER数据获取和处理
+        # print("\n" + "=" * 20 + " 2. NGER数据获取和处理 " + "=" * 20)
+        # nger_ok = fetch_nger_data(max_workers=1)
         
-        # 创建CER表
-        print_section("3. 创建CER表")
-        cer_table_ok = create_table_direct("CER表", create_cer_tables)
-        if not print_result("CER表准备", cer_table_ok):
-            return
+        # # 创建CER表
+        # print("\n" + "=" * 20 + " 3. 创建CER表 " + "=" * 20)
+        # cer_table_ok = create_table_direct("CER表", create_cer_tables)
+        # if not cer_table_ok:
+        #     print("✗CER表准备失败")
+        #     return
         
-        # CER电站数据获取和处理
-        print_section("4. CER电站数据获取和处理")
-        cer_ok = fetch_cer_data()
+        # # CER电站数据获取和处理
+        # print("\n" + "=" * 20 + " 4. CER电站数据获取和处理 " + "=" * 20)
+        # cer_ok = fetch_cer_data()
     
         # ABS数据处理
         abs_file = fetch_abs_data()
         if abs_file:
-            print_section("5. 创建ABS表")
+            print("\n" + "=" * 20 + " 5. 创建ABS表 " + "=" * 20)
             abs_table_ok = create_table_direct("ABS表", create_all_abs_tables, str(abs_file))
-            if not print_result("ABS表准备", abs_table_ok):
+            if not abs_table_ok:
+                print("✗ABS表准备失败")
                 return
             
-            print_section("6. ABS经济数据获取和处理")
+            print("\n" + "=" * 20 + " 6. ABS经济数据获取和处理 " + "=" * 20)
             abs_ok = process_abs_data(str(abs_file), max_workers=10)
         else:
             abs_ok = False
         
         # 打印最终结果
-        print_final_results([nger_ok, abs_ok, cer_ok])
+        # print_final_results([nger_ok, abs_ok, cer_ok])
         
         # 保存地理编码缓存
         print("正在保存地理编码缓存...")

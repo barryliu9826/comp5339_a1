@@ -1,14 +1,21 @@
 # Core dependencies for data processing
-requests>=2.31.0
-pandas>=2.2.0
+pandas>=2.3.0
+numpy>=2.3.0
 openpyxl>=3.1.0
-numpy>=1.26.0
 
 # Web scraping and automation
-selenium>=4.20.0
+selenium>=4.35.0
+requests>=2.32.0
 
 # Database connectivity
 psycopg2-binary>=2.9.0
 
-# Additional dependencies for geocoding and caching
-# (requests and pandas already included above)
+# Data visualization
+matplotlib>=3.9.0
+seaborn>=0.13.2
+
+# Data type hints and utilities
+typing-extensions>=4.0.0
+
+# Additional utilities
+pathlib2>=2.3.0;python_version<"3.4"
