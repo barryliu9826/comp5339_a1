@@ -25,6 +25,3 @@ geopy>=2.4.0
 # For enhanced data processing
 python-dateutil>=2.8.0
 pytz>=2023.3
-
-# For better error handling and logging
-warnings>=0.1.0
