@@ -2,29 +2,34 @@
 """Data acquisition and processing tools"""
 
 # Standard library imports
-from pathlib import Path
-import time
+import queue
 import re
 import threading
-import queue
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 # Third-party library imports
-import requests
 import pandas as pd
+import requests
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 # Local module imports
-from database_config import *
-from geocoding import add_geocoding_to_cer_data, add_geocoding_to_nger_data, save_global_cache, initialize_geocoding_cache
-from excel_utils import get_merged_cells, read_merged_headers
-from time_format_utils import process_nger_time_format, process_abs_time_format
 from data_cleaner import *
+from database_utils import *
+from excel_utils import get_merged_cells, read_merged_headers
+from geocoding import (
+    add_geocoding_to_cer_data,
+    add_geocoding_to_nger_data,
+    initialize_geocoding_cache,
+    save_global_cache
+)
+from time_format_utils import process_abs_time_format, process_nger_time_format
 
 # Configuration
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -538,6 +543,13 @@ def main():
         else:
             abs_ok = False
         
+        # Create proximity matches
+        print("\n7. Creating proximity matches (1km)...")
+        if create_proximity_join():
+            print("Proximity matches created successfully")
+        else:
+            print("Proximity matches creation failed")
+
         # Print final results
         print_final_results([nger_ok, abs_ok, cer_ok])
         

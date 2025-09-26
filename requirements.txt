@@ -1,6 +1,6 @@
 # Core dependencies for data processing
-pandas>=2.3.0
-numpy>=2.3.0
+pandas>=2.2.0
+numpy>=1.26.0
 openpyxl>=3.1.0
 
 # Web scraping and automation
@@ -11,5 +11,5 @@ requests>=2.32.0
 psycopg2-binary>=2.9.0
 
 # Data visualization
-matplotlib>=3.9.0
-seaborn>=0.13.2
+matplotlib>=3.10.0
+seaborn>=0.13.0

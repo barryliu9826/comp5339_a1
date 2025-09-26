@@ -3,19 +3,19 @@
 
 # Standard library imports
 import threading
+from datetime import datetime
 from typing import List
 
 # Third-party library imports
+import pandas as pd
 import psycopg2
 import psycopg2.pool
 from psycopg2.extras import execute_values
-import pandas as pd
-from datetime import datetime
 
 # Local module imports
+from data_cleaner import *
 from excel_utils import get_merged_cells, read_merged_headers
 from state_standardizer import standardize_dataframe_states, standardize_state_name
-from data_cleaner import *
 
 
 DB_CONFIG = {
@@ -1308,3 +1308,60 @@ def ensure_area_and_bbox_geometries(cursor, table_name: str,
         except Exception:
             pass
     print(f"  Geometry index ensured: {index_name}")
+
+
+def create_proximity_join():
+    """Create table with proximity matches (within 5km)"""
+    conn = get_db_connection()
+    if not conn:
+        print("Database connection failed")
+        return False
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Drop table if exists
+        cursor.execute("DROP TABLE IF EXISTS nger_cer_proximity_matches")
+        
+        # Create proximity matches table
+        create_sql = """
+        CREATE TABLE nger_cer_proximity_matches AS
+        SELECT 
+            n.id as nger_id,
+            c.id as cer_id,
+            'proximity_1km' as match_type,
+            ST_Distance(
+                ST_SetSRID(ST_MakePoint(n.lon, n.lat), 4326),
+                ST_SetSRID(ST_MakePoint(c.lon, c.lat), 4326)
+            ) * 111000 as distance_meters
+        FROM nger_unified n
+        CROSS JOIN cer_approved_power_stations c
+        WHERE n.lat IS NOT NULL AND n.lon IS NOT NULL 
+        AND c.lat IS NOT NULL AND c.lon IS NOT NULL
+        AND n.state = c.state
+        AND ST_DWithin(
+            ST_SetSRID(ST_MakePoint(n.lon, n.lat), 4326),
+            ST_SetSRID(ST_MakePoint(c.lon, c.lat), 4326),
+            0.01
+        );
+        """
+        
+        cursor.execute(create_sql)
+        conn.commit()
+        
+        # Get statistics
+        cursor.execute("SELECT COUNT(*) FROM nger_cer_proximity_matches")
+        count = cursor.fetchone()[0]
+        print(f"✓ Created nger_cer_proximity_matches table with {count} records")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Failed to create proximity join table: {e}")
+        conn.rollback()
+        return False
+    finally:
+        return_db_connection(conn)
+
+if __name__ == "__main__":
+    create_proximity_join()

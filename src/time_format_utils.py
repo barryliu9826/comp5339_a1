@@ -4,8 +4,13 @@ Time format processing utility module
 Used for unified time format processing before data insertion
 """
 
+# Standard library imports
+from typing import Optional, Tuple
+
+# Third-party library imports
 import pandas as pd
-from typing import Tuple, Optional
+
+# Local module imports
 from data_cleaner import process_cer_time_columns
 
 def split_nger_year(year_label: str) -> Tuple[Optional[int], Optional[int]]:

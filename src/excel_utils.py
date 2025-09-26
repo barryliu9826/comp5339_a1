@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Excel processing utilities"""
 
-import pandas as pd
+# Third-party library imports
 import openpyxl
+import pandas as pd
 
 
 def _load_workbook_and_get_merged_ranges(file_path: str, sheet_name: str):

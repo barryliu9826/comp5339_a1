@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""EDA visualization: NGER, CER, and ABS data from database"""
+"""EDA visualization: NGER data from database"""
 
+# Standard library imports
+import warnings
 from pathlib import Path
 from typing import List
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from database_config import get_db_connection, return_db_connection
 
+# Third-party library imports
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+
+# Local module imports
+from database_utils import get_db_connection, return_db_connection
+
+warnings.filterwarnings('ignore')
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "data" / "eda"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -43,41 +51,6 @@ def _setup_map_axes(ax, title, xlabel="Longitude", ylabel="Latitude"):
     ax.set_ylabel(ylabel)
     ax.set_title(title)
 
-def eda_cer_map():
-    """Plot CER power station locations by category"""
-    queries = [
-        ("approved", "SELECT lat, lon FROM cer_approved_power_stations"),
-        ("committed", "SELECT lat, lon FROM cer_committed_power_stations"),
-        ("probable", "SELECT lat, lon FROM cer_probable_power_stations"),
-    ]
-
-    frames = []
-    for label, sql in queries:
-        try:
-            df = fetch_df(sql)
-            if not df.empty and {"lat", "lon"}.issubset(df.columns):
-                df["category"] = label
-                frames.append(df)
-        except Exception:
-            continue
-
-    if not frames:
-        return
-
-    df_all = pd.concat(frames, ignore_index=True)
-    aus = _filter_australia_coords(df_all)
-    if aus.empty:
-        return
-
-    palette = {"approved": "#1b9e77", "committed": "#d95f02", "probable": "#7570b3"}
-
-    fig, ax = plt.subplots(figsize=(8.8, 7))
-    for cat, group in aus.groupby("category"):
-        ax.scatter(group["lon"], group["lat"], s=18, alpha=0.7, label=cat, c=palette.get(cat, None))
-
-    _setup_map_axes(ax, "CER Power Station Distribution (Approved / Committed / Probable)")
-    ax.legend(title="Category")
-    plot_save(fig, "cer_map_categories.png")
 
 def eda_nger_map():
     """Plot NGER facility locations by primary fuel type"""
@@ -111,92 +84,68 @@ def eda_nger_map():
     ax.legend(title="Primary Fuel", loc="best", fontsize=9)
     plot_save(fig, "nger_map_by_fuel.png")
 
-def list_abs_tables() -> List[str]:
-    sql = """
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema='public' AND table_name LIKE 'abs_%'
-        ORDER BY table_name
-    """
-    df = fetch_df(sql)
-    return df["table_name"].tolist() if not df.empty else []
-
-def _clean_table_name(name):
-    """Clean ABS table names for display"""
-    # Remove common suffixes
-    suffixes = ['_year_ended_30_june', '_year_ended_30_jun', '_as_at_june_quarter', '_at_30_june',
-               '_entering_personal_insolvencies', '_aged_15_years_and_over', '_gross_value_of_',
-               '_number_of_', '_residential_property_', '_estimated_dwelling_', '_building_',
-               '_agricultural_', '_business_']
+def analyze_nger_cer_proximity_fuel_types():
+    """Analyze fuel types in NGER-CER proximity matches - merged from proximity_eda.py"""
+    print("Starting NGER-CER Proximity Fuel Type Analysis")
     
-    clean = name.replace('abs_', '')
-    for suffix in suffixes:
-        clean = clean.replace(suffix, '')
-    
-    # Specific mappings to avoid duplicates
-    mappings = {
-        'business_entries_by_turnover': 'entries_by_turnover',
-        'business_entries': 'entries',
-        'business_exits_by_turnover': 'exits_by_turnover',
-        'business_exits': 'exits',
-        'debtors_entering': 'debtors',
-        'occupations_of_debtors': 'occupations',
-        'industry_of_employment': 'employment',
-        'gross_value_of_agricultural': 'agricultural_value',
-        'number_of_businesses_by_industry': 'businesses_by_industry',
-        'number_of_businesses_by_turnover': 'businesses_by_turnover',
-        'number_of_businesses': 'businesses',
-        'residential_property': 'property',
-        'estimated_dwelling': 'dwellings',
-        'building_approvals': 'approvals',
-        'agricultural_commodities': 'commodities'
-    }
-    
-    for pattern, replacement in mappings.items():
-        if pattern in clean:
-            return replacement
-    
-    return clean
-
-def eda_abs_overview():
-    """ABS geographic level distribution visualization"""
-    tables = list_abs_tables()
-    if not tables:
-        return
-
     try:
-        lvl_records = []
-        for t in tables:
-            sql = f"SELECT geographic_level AS lvl, COUNT(*) AS n FROM {t} WHERE geographic_level IS NOT NULL GROUP BY geographic_level"
-            df = fetch_df(sql)
-            if not df.empty:
-                df["table"] = t
-                lvl_records.append(df)
+        # Fetch data from nger_cer_proximity_matches table
+        df = fetch_df("SELECT primary_fuel FROM nger_cer_proximity_matches WHERE primary_fuel IS NOT NULL")
         
-        if lvl_records:
-            df_lvl = pd.concat(lvl_records, ignore_index=True)
-            df_lvl['table_clean'] = df_lvl['table'].apply(_clean_table_name)
-            df_lvl['level_label'] = df_lvl['lvl'].map({0: 'State Level', 1: 'Local Government Level'})
+        if df.empty:
+            print("No proximity fuel data available")
+            return
             
-            fig, ax = plt.subplots(figsize=(18, 10))
-            sns.barplot(data=df_lvl, x="table_clean", y="n", hue="level_label", ax=ax)
-            ax.set_title("ABS Geographic Level Distribution", fontsize=20, pad=30)
-            ax.set_xlabel("Table", fontsize=18)
-            ax.set_ylabel("Rows", fontsize=18)
-            ax.tick_params(axis='x', rotation=45, labelsize=14)
-            ax.tick_params(axis='y', labelsize=14)
-            ax.legend(fontsize=14)
-            plot_save(fig, "abs_overview_geographic_level.png")
+        print(f"Proximity fuel data records: {len(df):,}")
+        
+        # Count fuel types
+        fuel_counts = df['primary_fuel'].value_counts()
+        print(f"Unique fuel types in proximity matches: {len(fuel_counts)}")
+        
+        # Create pie chart (matching the style from proximity_eda.py)
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Calculate percentages and group small ones into "Others"
+        total_count = fuel_counts.sum()
+        fuel_percentages = (fuel_counts / total_count * 100)
+        
+        # Separate fuel types >= 2% and < 2%
+        major_fuels = fuel_counts[fuel_percentages >= 3.0]
+        minor_fuels = fuel_counts[fuel_percentages < 3.0]
+        
+        # Create data for pie chart
+        pie_data = major_fuels.copy()
+        if not minor_fuels.empty:
+            pie_data["Others"] = minor_fuels.sum()
+        
+        # Create pie chart with same styling as proximity_eda.py
+        wedges, texts, autotexts = ax.pie(
+            pie_data.values, 
+            labels=pie_data.index, 
+            autopct="%1.1f%%", 
+            startangle=90
+        )        
+        ax.set_title('Primary Fuel Types in Proximity Matches', fontsize=14, fontweight='bold')
+        
+        # Add legend with counts
+        ax.legend(wedges, [f'{label}: {value:,}' for label, value in pie_data.items()],
+                 title="Fuel Types", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
+        
+        plt.tight_layout()
+        plot_save(fig, "nger_cer_proximity_fuel_types_pie_chart.png")
+        
+        print(f"NGER-CER proximity fuel type analysis completed")
+        print(f"Visualization saved to: {OUTPUT_DIR}")
+        
     except Exception as e:
-        print(f"ABS overview failed: {e}")
+        print(f"Error analyzing NGER-CER proximity fuel types: {e}")
 
 def main():
     sns.set_theme(style="whitegrid")
     print(f"Output directory: {OUTPUT_DIR}")
     
-    eda_cer_map()
     eda_nger_map()
-    eda_abs_overview()
+    analyze_nger_cer_proximity_fuel_types()
     
     print("EDA charts generated in data/eda/")
 

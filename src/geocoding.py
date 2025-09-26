@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Geocoding module"""
 
-import requests
-import time
-import pandas as pd
-from typing import Dict, Optional, Any
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
+# Standard library imports
 import hashlib
-from pathlib import Path
+import json
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+# Third-party library imports
+import pandas as pd
+import requests
 
 # Enter your Google Maps API Key here (for local/assignment environment only).
 # Note: Do not commit real keys to public repositories or share them.
