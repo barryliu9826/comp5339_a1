@@ -16,7 +16,11 @@ This project provides a complete data pipeline for acquiring, processing, geocod
   - Business entries/exits
   - Employment statistics
   - Property transfers
-  - And more...
+  - Personal insolvencies
+  - Dwelling stock estimates
+  - Industry employment data
+  - Business turnover analysis
+  - Gross agricultural production values
 
 ## System Architecture
 
@@ -28,7 +32,7 @@ This project provides a complete data pipeline for acquiring, processing, geocod
 
 ### Core Components
 
-#### Data Acquisition (`data_acquisition_processor.py`)
+#### Data Acquisition (`data_processor.py`)
 - Automated web scraping using Selenium
 - Multi-threaded data collection
 - Excel file processing with merged cell handling
@@ -68,24 +72,18 @@ This project provides a complete data pipeline for acquiring, processing, geocod
 
 ### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd comp5339_a1
-   ```
-
-2. **Install dependencies**
+1. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Set up PostgreSQL database**
+2. **Set up PostgreSQL database**
    ```sql
    CREATE DATABASE your_database_name;
    CREATE EXTENSION postgis;
    ```
 
-4. **Configure database connection**
+3. **Configure database connection**
    Update the `DB_CONFIG` in `src/database_utils.py`:
    ```python
    DB_CONFIG = {
@@ -97,22 +95,17 @@ This project provides a complete data pipeline for acquiring, processing, geocod
    }
    ```
 
-5. **Set up Google Maps API key**
+4. **Set up Google Maps API key**
    Update the `HARDCODED_GOOGLE_MAPS_API_KEY` in `src/geocoding.py` with your API key.
 
 ### Usage
 
 1. **Run data acquisition**
    ```bash
-   python src/data_acquisition_processor.py
+   python src/data_processor.py
    ```
 
-2. **Process and load data**
-   ```bash
-   python src/database_utils.py
-   ```
-
-3. **Generate visualizations**
+2. **Generate visualizations**
    ```bash
    python src/eda_visualization.py
    ```
@@ -122,7 +115,7 @@ This project provides a complete data pipeline for acquiring, processing, geocod
 ```
 comp5339_a1/
 ├── src/                          # Source code
-│   ├── data_acquisition_processor.py  # Data collection
+│   ├── data_processor.py             # Data collection
 │   ├── data_cleaner.py               # Data cleaning
 │   ├── database_utils.py             # Database operations
 │   ├── eda_visualization.py          # Visualization
@@ -191,8 +184,6 @@ Configure data source URLs in `nger_data_api_links.csv` for automated data colle
 The system generates various visualizations including:
 - Geographic distribution of power facilities by fuel type
 - Proximity analysis between NGER and CER facilities
-- Economic indicators by region
-- Time series analysis of energy production
 
 ## Data Analysis Capabilities
 
@@ -214,15 +205,3 @@ The system generates various visualizations including:
 3. Make your changes
 4. Add tests if applicable
 5. Submit a pull request
-
-## License
-
-This project is for educational purposes as part of COMP5339 Assignment 1.
-
-## Support
-
-For questions or issues, please refer to the course materials or contact the development team.
-
----
-
-**Note**: This system is designed for academic use and data analysis. Ensure compliance with data source terms of use and API usage policies.
