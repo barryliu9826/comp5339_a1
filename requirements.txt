@@ -13,3 +13,18 @@ psycopg2-binary>=2.9.0
 # Data visualization
 matplotlib>=3.10.0
 seaborn>=0.13.0
+
+# Additional dependencies for enhanced functionality
+# For better HTTP requests handling
+urllib3>=2.0.0
+certifi>=2023.0.0
+
+# For potential geocoding enhancements
+geopy>=2.4.0
+
+# For enhanced data processing
+python-dateutil>=2.8.0
+pytz>=2023.3
+
+# For better error handling and logging
+warnings>=0.1.0
